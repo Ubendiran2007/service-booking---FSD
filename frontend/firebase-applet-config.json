@@ -1,0 +1,10 @@
+{
+  "projectId": "servicebookschedule",
+  "appId": "1:495313265735:web:1d5a4d494b11bb280afd62",
+  "apiKey": "AIzaSyBgneRW163XniicStTokWNCh7zXMk4jl50",
+  "authDomain": "servicebookschedule.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "servicebookschedule.firebasestorage.app",
+  "messagingSenderId": "495313265735",
+  "measurementId": "G-7P94PZKFGZ"
+}

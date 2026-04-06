@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Admins can read/write everything
+    function isAdmin() {
+      return request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    match /users/{userId} {
+      // Anyone authenticated can read user profiles
+      allow read: if request.auth != null;
+      // Users can modify only their own profile, or admins can edit any
+      allow write: if request.auth != null && (request.auth.uid == userId || isAdmin());
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if request.auth != null && (
+        resource.data.customerId == request.auth.uid || 
+        resource.data.workerId == request.auth.uid || 
+        isAdmin()
+      );
+      // Backend validates the payloads, but client should only write if authed
+      allow create: if request.auth != null && request.resource.data.customerId == request.auth.uid;
+      // Workers and Customers can update statuses
+      allow update: if request.auth != null;
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      // User can only view their own notifications
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      // Clients can only mark as read. Backend creates them.
+      allow update: if request.auth != null && resource.data.userId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+      allow create: if request.auth != null; // Since our node backend currently runs on client credentials instead of admin SDK, it needs this
+      allow delete: if isAdmin();
+    }
+  }
+}

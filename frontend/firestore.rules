@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Fields: uid, email, role, status, profile, createdAt
+    //
+    // Collection: bookings
+    // Fields: customerId, workerId, serviceType, date, time, status, payment, feedback, createdAt
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "ubendiran2007@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'status', 'profile', 'createdAt']) &&
+             data.role in ['admin', 'customer', 'worker'] &&
+             data.status in ['pending', 'approved', 'active', 'rejected'];
+    }
+
+    function isValidBooking(data) {
+      return data.keys().hasAll(['customerId', 'workerId', 'serviceType', 'date', 'time', 'status', 'payment', 'createdAt']) &&
+             data.status in ['pending', 'accepted', 'rejected', 'completed', 'cancelled'];
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin() || (resource.data.role == 'worker' && resource.data.status == 'active'));
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && 
+                    (request.resource.data.role != 'admin' || isAdmin());
+      allow update: if isAuthenticated() && (
+        (isOwner(userId) && request.resource.data.role == resource.data.role && request.resource.data.status == resource.data.status) || 
+        isAdmin()
+      );
+    }
+
+    // Bookings Collection
+    match /bookings/{bookingId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.customerId || 
+        request.auth.uid == resource.data.workerId || 
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.customerId && isValidBooking(request.resource.data);
+      allow update: if isAuthenticated() && (
+        request.auth.uid == resource.data.customerId || 
+        request.auth.uid == resource.data.workerId || 
+        isAdmin()
+      ) && isValidBooking(request.resource.data);
+    }
+  }
+}

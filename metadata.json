@@ -1,0 +1,5 @@
+{
+  "name": "ServiFlow - Service Booking & Scheduling System",
+  "description": "A professional platform connecting customers with skilled workers like electricians, plumbers, and mechanics with real-time scheduling and secure payments.",
+  "requestFramePermissions": ["geolocation"]
+}
