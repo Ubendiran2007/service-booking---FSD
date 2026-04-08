@@ -6,6 +6,8 @@ export type VerificationStatus = 'none' | 'pending' | 'verified' | 'rejected';
 export interface WorkerVerification {
   status: VerificationStatus;
   certificateUrls: string[];
+  /** Worker-provided company/employee ID, validated by admin list. */
+  employeeId?: string;
   skills: string[];
   experienceYears: number;
   adminRemarks?: string;
@@ -53,6 +55,7 @@ export interface User {
 export type BookingStatus = 'pending' | 'accepted' | 'rejected' | 'completed' | 'cancelled';
 
 export type BookingUrgency = 'normal' | 'urgent';
+export type BookingLocationSource = 'live' | 'home' | 'manual';
 
 /** Job complexity tier — drives work cost in the pricing engine. */
 export type ServiceLevel = 'small' | 'medium' | 'large';
@@ -66,6 +69,7 @@ export interface Booking {
   time: string;
   status: BookingStatus;
   location?: { lat: number; lng: number } | string;
+  locationSource?: BookingLocationSource;
   notes?: string;
   payment: {
     amount: number;

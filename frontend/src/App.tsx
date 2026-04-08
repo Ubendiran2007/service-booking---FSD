@@ -4,7 +4,8 @@ import {
   Routes, 
   Route, 
   Navigate, 
-  useNavigate 
+  useNavigate,
+  useLocation,
 } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
@@ -23,6 +24,7 @@ const ProtectedRoute = ({ children, allowedRoles }: { children: (user: User) => 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -54,7 +56,11 @@ const ProtectedRoute = ({ children, allowedRoles }: { children: (user: User) => 
   );
   
   if (!user) return <Navigate to="/login" />;
-  if (user.role === 'worker' && user.status === 'pending') return <PendingApproval />;
+  if (user.role === 'worker' && user.status === 'pending') {
+    // Allow workers to upload/update certificates during the admin review phase.
+    if (location.pathname === '/worker/verification') return <>{children(user)}</>;
+    return <PendingApproval />;
+  }
 
   return <>{children(user)}</>;
 };
@@ -107,6 +113,11 @@ export default function App() {
           <Route path="/worker/reviews" element={
             <ProtectedRoute allowedRoles={['worker']}>
               {(user) => <WorkerDashboard view="reviews" user={user} />}
+            </ProtectedRoute>
+          } />
+          <Route path="/worker/reports" element={
+            <ProtectedRoute allowedRoles={['worker']}>
+              {(user) => <WorkerDashboard view="reports" user={user} />}
             </ProtectedRoute>
           } />
           <Route path="/worker/verification" element={

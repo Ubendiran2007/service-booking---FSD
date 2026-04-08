@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "node index.js"
+    "dev": "node index.js",
+    "seed:tn": "node scripts/seedTamilNaduWorkers.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

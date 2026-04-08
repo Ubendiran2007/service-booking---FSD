@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { Calendar, Mail, Lock, User, Phone, MapPin, Briefcase, AlertCircle, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -16,6 +16,7 @@ export default function Register() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [category, setCategory] = useState('electrician');
+  const [employeeId, setEmployeeId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [location, setLocation] = useState<{ lat: number, lng: number } | null>(null);
@@ -83,9 +84,38 @@ export default function Register() {
       }
       // Ensure address is derived from coordinates (no manual entry).
       const derivedAddress = address?.trim() ? address.trim() : coordsToLabel(location);
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const uid = userCredential.user.uid;
-      
+      let uid: string;
+      try {
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        uid = userCredential.user.uid;
+      } catch (err: any) {
+        // If the email already exists, let workers update onboarding details instead of failing.
+        if (err?.code === 'auth/email-already-in-use' && role === 'worker') {
+          const userCredential = await signInWithEmailAndPassword(auth, email, password);
+          uid = userCredential.user.uid;
+        } else {
+          throw err;
+        }
+      }
+      if (role === 'worker') {
+        if (!employeeId.trim()) {
+          throw new Error('Employee ID is required for worker verification.');
+        }
+      }
+      const normalizedEmployeeId = employeeId.trim().toUpperCase();
+      if (role === 'worker') {
+        const existingIdQuery = query(
+          collection(db, 'users'),
+          where('role', '==', 'worker'),
+          where('profile.verification.employeeId', '==', normalizedEmployeeId)
+        );
+        const existingIdSnap = await getDocs(existingIdQuery);
+        const conflict = existingIdSnap.docs.find((d) => d.id !== uid);
+        if (conflict) {
+          throw new Error('Employee ID already exists. Please use your assigned unique ID.');
+        }
+      }
+
       const userData = {
         uid,
         email,
@@ -102,9 +132,10 @@ export default function Register() {
             totalReviews: 0,
             welcomeShown: false,
             verification: {
-              status: 'none' as const,
+              status: role === 'worker' ? 'pending' as const : 'none' as const,
               certificateUrls: [],
-              skills: [],
+              employeeId: role === 'worker' ? normalizedEmployeeId : undefined,
+              skills: role === 'worker' ? [category] : [],
               experienceYears: 0,
             },
             serviceRadiusKm: 15,
@@ -115,11 +146,11 @@ export default function Register() {
         createdAt: new Date().toISOString()
       };
 
-      await setDoc(doc(db, 'users', uid), userData);
+      await setDoc(doc(db, 'users', uid), userData, { merge: true });
       
       if (role === 'worker') {
-        setToast({ message: 'Registration successful! Please wait for admin approval.', type: 'success', visible: true });
-        setTimeout(() => navigate('/login'), 3000);
+        setToast({ message: 'Registration submitted. Waiting for admin approval.', type: 'success', visible: true });
+        navigate('/worker/verification');
       } else {
         navigate('/customer');
       }
@@ -333,6 +364,21 @@ export default function Register() {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm font-semibold text-slate-700 ml-1">Employee ID</label>
+                  <input
+                    type="text"
+                    required={role === 'worker'}
+                    value={employeeId}
+                    onChange={(e) => setEmployeeId(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm uppercase"
+                    placeholder="e.g. ARUNA98765"
+                  />
+                  <p className="text-[10px] text-slate-400 font-bold">
+                    Rule: first 5 letters of your name (uppercase) + first 5 digits of phone.
+                  </p>
                 </div>
               </div>
             )}

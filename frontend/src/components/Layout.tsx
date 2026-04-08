@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { LogOut, User as UserIcon, Calendar, CheckCircle, Clock, Star, MapPin, Search, Menu, X, Bell, Navigation, CreditCard, ExternalLink, Shield } from 'lucide-react';
+import { LogOut, User as UserIcon, Calendar, CheckCircle, Clock, Star, MapPin, Search, Menu, X, Bell, Navigation, CreditCard, ExternalLink, Shield, BarChart3 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { auth, db } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
@@ -19,6 +19,19 @@ export default function Layout({ children, role, userName }: LayoutProps) {
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [notifications, setNotifications] = React.useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = React.useState(false);
+  const notificationPanelRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!showNotifications) return;
+    const closeIfOutside = (e: MouseEvent) => {
+      const el = notificationPanelRef.current;
+      if (el && !el.contains(e.target as Node)) {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener('mousedown', closeIfOutside);
+    return () => document.removeEventListener('mousedown', closeIfOutside);
+  }, [showNotifications]);
 
   React.useEffect(() => {
     if (!auth.currentUser) return;
@@ -56,6 +69,7 @@ export default function Layout({ children, role, userName }: LayoutProps) {
     worker: [
       { label: 'My Schedule', path: '/worker', icon: Calendar },
       { label: 'New Requests', path: '/worker/requests', icon: Clock },
+      { label: 'Reports', path: '/worker/reports', icon: BarChart3 },
       { label: 'Verification', path: '/worker/verification', icon: Shield },
       { label: 'My Reviews', path: '/worker/reviews', icon: Star },
     ],
@@ -88,9 +102,10 @@ export default function Layout({ children, role, userName }: LayoutProps) {
               ))}
               <div className="h-6 w-px bg-slate-200 mx-2" />
               <div className="flex items-center gap-4">
-                {/* Notifications */}
-                <div className="relative">
+                {/* Notifications — ref used for click-outside to close */}
+                <div className="relative" ref={notificationPanelRef}>
                   <button 
+                    type="button"
                     onClick={() => setShowNotifications(!showNotifications)}
                     className="p-2 text-slate-400 hover:text-indigo-600 transition-colors relative"
                   >

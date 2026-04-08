@@ -1,4 +1,6 @@
 node_modules/
+serviceAccountKey.json
+servicebookschedule-firebase-adminsdk-*.json
 build/
 dist/
 coverage/

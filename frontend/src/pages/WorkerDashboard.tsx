@@ -1,10 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, auth, storage } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
 import { Booking, BookingStatus, User } from '../types';
 import Layout from '../components/Layout';
-import { Check, X, Clock, Calendar, MapPin, Phone, User as UserIcon, DollarSign, Navigation, Star, TrendingUp, AlertCircle, Info, Zap, Award, Bell, LogOut, ChevronRight, CheckCircle, Shield, Activity, Flame, FileUp } from 'lucide-react';
+import { Check, X, Clock, Calendar, MapPin, Phone, User as UserIcon, DollarSign, Navigation, Star, TrendingUp, AlertCircle, Info, Zap, Award, Bell, LogOut, ChevronRight, CheckCircle, Shield, Activity, Flame, BarChart3, LineChart } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import TrackingMap from '../components/TrackingMap';
@@ -28,12 +27,13 @@ const haversineDistance = (p1: { lat: number; lng: number }, p2: { lat: number; 
   return R * c;
 };
 
-export default function WorkerDashboard({ view = 'schedule', user }: { view?: 'schedule' | 'requests' | 'reviews' | 'verification', user: User }) {
+export default function WorkerDashboard({ view = 'schedule', user }: { view?: 'schedule' | 'requests' | 'reviews' | 'verification' | 'reports', user: User }) {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [rejectModal, setRejectModal] = useState<{ open: boolean; bookingId: string }>({ open: false, bookingId: '' });
   const [rejectionReason, setRejectionReason] = useState('');
   const [viewMap, setViewMap] = useState<Booking | null>(null);
+  const liveRouteMapRef = useRef<HTMLDivElement>(null);
   const [customerProfiles, setCustomerProfiles] = useState<Record<string, any>>({});
   const [isUpdating, setIsUpdating] = useState(false);
   const [showWelcomeModal, setShowWelcomeModal] = useState(!user.profile.welcomeShown);
@@ -47,7 +47,9 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
   const [skillInput, setSkillInput] = useState((user.profile.verification?.skills || []).join(', '));
   const [expYears, setExpYears] = useState(String(user.profile.verification?.experienceYears ?? 0));
   const [serviceRadius, setServiceRadius] = useState(String(user.profile.serviceRadiusKm ?? 15));
-  const [certUploading, setCertUploading] = useState(false);
+  const [employeeId, setEmployeeId] = useState(user.profile.verification?.employeeId ?? '');
+  const [reportPeriod, setReportPeriod] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
+  const [reportVisual, setReportVisual] = useState<'card' | 'bar' | 'graph'>('bar');
 
   const startWorkerTracking = useCallback(() => {
     if (!navigator.geolocation) return;
@@ -110,6 +112,15 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
        }
     }
   }, [bookings, startWorkerTracking, isOnline]);
+
+  /** When opening the live route panel from Active Jobs, scroll so the map is in view (user may be scrolled down). */
+  useEffect(() => {
+    if (!viewMap) return;
+    const t = window.setTimeout(() => {
+      liveRouteMapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [viewMap]);
 
   const handleStatusUpdate = async (bookingId: string, status: BookingStatus, reason?: string) => {
     try {
@@ -206,31 +217,82 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
   const slotBookingOnDay = (time: string) =>
     bookings.find((b) => b.date === scheduleViewDate && b.time === time);
 
-  const handleCertUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !auth.currentUser) return;
-    setCertUploading(true);
-    try {
-      const safeName = file.name.replace(/\s+/g, '_');
-      const path = `worker_verification/${auth.currentUser.uid}/${Date.now()}_${safeName}`;
-      const storageRef = ref(storage, path);
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
-      const prev = user.profile.verification?.certificateUrls || [];
-      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-        'profile.verification.certificateUrls': [...prev, url],
-        'profile.verification.submittedAt': new Date().toISOString(),
-        'profile.verification.status': 'pending',
+  const reportData = (() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (reportPeriod === 'daily') {
+      const todayKey = format(today, 'yyyy-MM-dd');
+      return Array.from({ length: 7 }, (_, idx) => {
+        const day = new Date(today);
+        day.setDate(today.getDate() - (6 - idx));
+        const dayKey = format(day, 'yyyy-MM-dd');
+        const dayDone = completedJobs.filter((b) => b.date === dayKey);
+        // Include in-progress jobs for today so the current day doesn't appear empty.
+        const dayInProgress =
+          dayKey === todayKey
+            ? bookings.filter((b) => b.date === dayKey && (b.status === 'pending' || b.status === 'accepted'))
+            : [];
+        const completedEarnings = dayDone.reduce((sum, b) => sum + (b.payment?.amount || 0), 0);
+        const inProgressEarnings = dayInProgress.reduce((sum, b) => sum + (b.payment?.amount || 0), 0);
+        return {
+          key: dayKey,
+          label: format(day, 'EEE'),
+          subLabel: dayKey === todayKey ? `${format(day, 'dd MMM')} (Today)` : format(day, 'dd MMM'),
+          jobs: dayDone.length + dayInProgress.length,
+          earnings: completedEarnings + inProgressEarnings,
+        };
       });
-      setToast({ message: 'Certificate uploaded. Awaiting admin review.', type: 'success', visible: true });
-    } catch (err) {
-      console.error(err);
-      setToast({ message: 'Upload failed. Check Storage rules / connection.', type: 'error', visible: true });
-    } finally {
-      setCertUploading(false);
-      e.target.value = '';
     }
-  };
+
+    if (reportPeriod === 'weekly') {
+      return Array.from({ length: 8 }, (_, idx) => {
+        const rangeEnd = new Date(today);
+        rangeEnd.setDate(today.getDate() - (7 * (7 - idx)));
+        const rangeStart = new Date(rangeEnd);
+        rangeStart.setDate(rangeEnd.getDate() - 6);
+        const inWeek = completedJobs.filter((b) => {
+          const d = new Date(`${b.date}T00:00:00`);
+          return d >= rangeStart && d <= rangeEnd;
+        });
+        return {
+          key: format(rangeStart, 'yyyy-MM-dd'),
+          label: `W${idx + 1}`,
+          subLabel: `${format(rangeStart, 'dd MMM')} - ${format(rangeEnd, 'dd MMM')}`,
+          jobs: inWeek.length,
+          earnings: inWeek.reduce((sum, b) => sum + (b.payment?.amount || 0), 0),
+        };
+      });
+    }
+
+    return Array.from({ length: 6 }, (_, idx) => {
+      const monthDate = new Date(today.getFullYear(), today.getMonth() - (5 - idx), 1);
+      const m = monthDate.getMonth();
+      const y = monthDate.getFullYear();
+      const inMonth = completedJobs.filter((b) => {
+        const d = new Date(`${b.date}T00:00:00`);
+        return d.getMonth() === m && d.getFullYear() === y;
+      });
+      return {
+        key: format(monthDate, 'yyyy-MM'),
+        label: format(monthDate, 'MMM'),
+        subLabel: format(monthDate, 'yyyy'),
+        jobs: inMonth.length,
+        earnings: inMonth.reduce((sum, b) => sum + (b.payment?.amount || 0), 0),
+      };
+    });
+  })();
+  const reportMax = Math.max(...reportData.map((d) => d.earnings), 1);
+  const reportTotals = reportData.reduce(
+    (acc, d) => ({ jobs: acc.jobs + d.jobs, earnings: acc.earnings + d.earnings }),
+    { jobs: 0, earnings: 0 }
+  );
+  const hasReportData = reportData.some((d) => d.earnings > 0 || d.jobs > 0);
+  const graphPoints = reportData.map((d, idx) => {
+    const x = reportData.length <= 1 ? 50 : (idx / (reportData.length - 1)) * 100;
+    const y = 100 - (reportMax > 0 ? (d.earnings / reportMax) * 100 : 0);
+    return { x, y: Math.max(0, Math.min(100, y)), label: d.label, value: d.earnings };
+  });
 
   const saveProfessionalProfile = async () => {
     if (!auth.currentUser) return;
@@ -243,6 +305,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
     const patch: Record<string, unknown> = {
       'profile.verification.skills': skills,
       'profile.verification.experienceYears': yrs,
+      'profile.verification.employeeId': employeeId.trim().toUpperCase(),
       'profile.serviceRadiusKm': radius,
     };
     if (user.profile.verification?.status !== 'verified') {
@@ -268,45 +331,29 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
   return (
     <Layout role="worker" userName={user.profile.name}>
       <div className="space-y-10">
-        {/* Duty Status Control */}
-        <div className="flex items-center justify-between bg-white px-8 py-5 rounded-[32px] border border-slate-200 shadow-sm relative overflow-hidden group">
-           <div className="absolute top-0 right-0 p-4 opacity-[0.03] group-hover:opacity-10 transition-opacity pointer-events-none">
-              <Activity className="w-24 h-24 text-indigo-600" />
-           </div>
-           <div className="flex items-center gap-6 relative z-10">
-              <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center transition-all shadow-xl", isOnline ? "bg-emerald-500 text-white shadow-emerald-200" : "bg-slate-200 text-slate-500")}>
-                 {isOnline ? <Zap className="w-6 h-6 animate-pulse" /> : <X className="w-6 h-6" />}
-              </div>
-              <div>
-                 <h2 className="text-xl font-black text-slate-900 tracking-tight leading-none mb-1">
-                    Performance Mode: <span className={isOnline ? "text-emerald-600" : "text-slate-400"}>{isOnline ? 'Online' : 'Incognito'}</span>
-                 </h2>
-                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isOnline ? 'Active on map • Accepting requests' : 'Hidden from map • Personal time'}</p>
-              </div>
-           </div>
-            <div className="flex gap-3 relative z-10">
-                <button 
-                 onClick={async () => {
-                   try {
-                     const newStatus = !isOnline;
-                     setIsOnline(newStatus);
-                     await updateDoc(doc(db, 'users', auth.currentUser!.uid), { 'profile.isOnline': newStatus });
-                     setToast({ message: `Status Updated: You are now ${newStatus ? 'Online' : 'Incognito'}`, type: 'success', visible: true });
-                   } catch (err) {
-                     setToast({ message: "Failed to update status. Check your connection.", type: 'error', visible: true });
-                   }
-                 }}
-                 className={cn("px-8 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all shadow-lg active:scale-95", isOnline ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-100")}
-               >
-                  {isOnline ? 'Go Incognito' : 'Go Online'}
-               </button>
-            </div>
-          </div>
+        <div className="flex items-center justify-end">
+          <button
+            onClick={async () => {
+              try {
+                const newStatus = !isOnline;
+                setIsOnline(newStatus);
+                await updateDoc(doc(db, 'users', auth.currentUser!.uid), { 'profile.isOnline': newStatus });
+                setToast({ message: `Status Updated: You are now ${newStatus ? 'Online' : 'Incognito'}`, type: 'success', visible: true });
+              } catch (err) {
+                setToast({ message: "Failed to update status. Check your connection.", type: 'error', visible: true });
+              }
+            }}
+            className={cn("px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg active:scale-95", isOnline ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-100")}
+          >
+            {isOnline ? 'Go Incognito' : 'Go Online'}
+          </button>
+        </div>
 
-        {/* Real-Time Map Panel */}
+        {/* Real-Time Map Panel — scroll target for "Live Route" */}
+        <div ref={liveRouteMapRef} className="scroll-mt-24">
         <AnimatePresence>
           {viewMap && (
-            <motion.div 
+            <motion.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
@@ -342,7 +389,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
             </motion.div>
           )}
         </AnimatePresence>
-
+        </div>
 
         {view === 'requests' && (
           <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="space-y-10">
@@ -422,7 +469,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                          </div>
                          <div className="bg-indigo-600 rounded-2xl p-3 shadow-lg shadow-indigo-100 text-center flex flex-col justify-center">
                             <span className="text-[8px] font-black text-white/50 uppercase tracking-tighter mb-0.5">Earnings</span>
-                            <span className="text-sm font-black text-white leading-none">${booking.payment.amount}</span>
+                            <span className="text-sm font-black text-white leading-none">₹{booking.payment.amount}</span>
                          </div>
                       </div>
 
@@ -454,7 +501,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-10">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
               {[
-                { label: 'Revenue Efficiency', value: `$${totalEarnings}`, icon: DollarSign, color: 'bg-emerald-500', trend: `Avg $${avgJobValue}/job`, desc: 'Total earnings' },
+                { label: 'Revenue Efficiency', value: `₹${totalEarnings}`, icon: DollarSign, color: 'bg-emerald-500', trend: `Avg ₹${avgJobValue}/job`, desc: 'Total earnings' },
                 { label: 'Market Standing', value: reliability, icon: Award, color: 'bg-amber-500', trend: 'Based on reliability', desc: 'Rank vs others' },
                 { label: 'Peak Velocity', value: peakDisplay, icon: Zap, color: 'bg-indigo-500', trend: 'Highest demand', desc: 'Optimal work time' },
                 { label: 'Acceptance Rate', value: `${acceptanceRate}%`, icon: TrendingUp, color: 'bg-indigo-600', trend: 'Job conversion', desc: 'Last 30 days' },
@@ -488,10 +535,14 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                   const pct = maxHourEarning > 0 ? Math.round((amt / maxHourEarning) * 100) : 0;
                   return (
                     <div key={h} className="flex flex-col items-center gap-2 flex-1">
+                      <span className={cn('text-[9px] font-black', amt > 0 ? 'text-indigo-600' : 'text-slate-300')}>
+                        ₹{amt.toFixed(0)}
+                      </span>
                       <motion.div
                         initial={{ height: 0 }}
                         animate={{ height: `${Math.max(pct, 4)}%` }}
                         className={cn('w-full rounded-t-lg min-h-[4px]', amt > 0 ? 'bg-indigo-600' : 'bg-slate-100')}
+                        title={`${h}:00 · ₹${amt.toFixed(0)}`}
                       />
                       <span className="text-[9px] font-black text-slate-400">{h}</span>
                     </div>
@@ -573,6 +624,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                 )}
               </div>
             </section>
+
           </motion.div>
         )}
 
@@ -630,6 +682,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                 )}
               </div>
             </section>
+
           </motion.div>
         )}
 
@@ -658,6 +711,18 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                   placeholder="e.g. Pipe repair, Drain cleaning, Installation"
                 />
               </div>
+              <div className="space-y-2 mb-6">
+                <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Employee ID</label>
+                <input
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-mono uppercase"
+                  value={employeeId}
+                  onChange={(e) => setEmployeeId(e.target.value)}
+                  placeholder="e.g. EMP10452"
+                />
+                <p className="text-[10px] text-slate-400 font-bold">
+                  Must match: first 5 letters of your name (uppercase) + first 5 digits of phone.
+                </p>
+              </div>
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="space-y-2">
                   <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Experience (years)</label>
@@ -681,27 +746,6 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                 </div>
               </div>
 
-              <div className="space-y-3 mb-6">
-                <label className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                  <FileUp className="w-4 h-4" /> Certificates (PDF / images)
-                </label>
-                <input type="file" accept="image/*,.pdf,application/pdf" onChange={handleCertUpload} disabled={certUploading} className="text-sm" />
-                <p className="text-[10px] text-slate-400 font-bold">
-                  {certUploading ? 'Uploading…' : 'Requires Firebase Storage rules for authenticated uploads.'}
-                </p>
-                {(user.profile.verification?.certificateUrls || []).length > 0 && (
-                  <ul className="text-xs font-mono text-indigo-600 space-y-1 break-all">
-                    {user.profile.verification!.certificateUrls!.map((u, i) => (
-                      <li key={i}>
-                        <a href={u} target="_blank" rel="noreferrer" className="underline">
-                          Document {i + 1}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
               <button
                 type="button"
                 onClick={saveProfessionalProfile}
@@ -710,6 +754,153 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                 Save skills, experience & zone
               </button>
             </div>
+          </motion.div>
+        )}
+
+        {view === 'reports' && (
+          <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
+            <section className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900 flex items-center gap-2">
+                    <BarChart3 className="w-7 h-7 text-indigo-600" /> Performance Reports
+                  </h2>
+                  <p className="text-slate-500 text-sm mt-1">
+                    Switch between daily, weekly and monthly reports. Choose card, bar or graph view.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 mb-3">
+                {[
+                  { id: 'daily' as const, label: 'Daily Report' },
+                  { id: 'weekly' as const, label: 'Weekly Report' },
+                  { id: 'monthly' as const, label: 'Monthly Report' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setReportPeriod(p.id)}
+                    className={cn(
+                      'px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest border transition-all',
+                      reportPeriod === p.id
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap gap-2 mb-6">
+                {[
+                  { id: 'card' as const, label: 'Card', icon: Calendar },
+                  { id: 'bar' as const, label: 'Bar', icon: BarChart3 },
+                  { id: 'graph' as const, label: 'Graph', icon: LineChart },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setReportVisual(m.id)}
+                    className={cn(
+                      'px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest border transition-all flex items-center gap-2',
+                      reportVisual === m.id
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    )}
+                  >
+                    <m.icon className="w-3.5 h-3.5" /> {m.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total jobs</p>
+                  <p className="text-2xl font-black text-slate-900 mt-1">{reportTotals.jobs}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total earnings</p>
+                  <p className="text-2xl font-black text-slate-900 mt-1">₹{reportTotals.earnings.toFixed(0)}</p>
+                </div>
+              </div>
+
+              {reportVisual === 'card' && (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                  {reportData.map((d) => (
+                    <div key={d.key} className="rounded-2xl border border-slate-100 bg-white p-3">
+                      <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider">{d.label}</p>
+                      <p className="text-[10px] text-slate-400">{d.subLabel}</p>
+                      <p className="text-sm font-black text-slate-900 mt-1">₹{d.earnings.toFixed(0)}</p>
+                      <p className="text-[10px] font-bold text-indigo-600 mt-1">{d.jobs} jobs</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {reportVisual === 'bar' && (
+                <div className="rounded-2xl border border-slate-100 p-4">
+                  {!hasReportData ? (
+                    <div className="h-40 flex items-center justify-center text-slate-400 font-bold text-sm">
+                      No report data available for selected period.
+                    </div>
+                  ) : (
+                    <div className="flex items-end gap-2 h-44">
+                      {reportData.map((d) => {
+                        const pct = reportMax > 0 ? Math.round((d.earnings / reportMax) * 100) : 0;
+                        return (
+                          <div key={d.key} className="flex-1 flex flex-col items-center gap-2">
+                            <span className="text-[9px] font-bold text-slate-400">₹{d.earnings.toFixed(0)}</span>
+                            <motion.div
+                              initial={{ height: 0 }}
+                              animate={{ height: `${Math.max(pct, d.earnings > 0 ? 10 : 4)}%` }}
+                              className={cn('w-full rounded-t-xl min-h-[4px]', d.earnings > 0 ? 'bg-indigo-600' : 'bg-slate-100')}
+                              title={`${d.subLabel}: ₹${d.earnings.toFixed(0)} • ${d.jobs} jobs`}
+                            />
+                            <span className="text-[10px] font-black text-slate-500">{d.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {reportVisual === 'graph' && (
+                <div className="rounded-2xl border border-slate-100 p-4">
+                  {!hasReportData ? (
+                    <div className="h-40 flex items-center justify-center text-slate-400 font-bold text-sm">
+                      No report data available for selected period.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="h-40">
+                        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
+                          <polyline
+                            fill="none"
+                            stroke="rgb(79 70 229)"
+                            strokeWidth="2"
+                            points={graphPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                          />
+                          {graphPoints.map((p) => (
+                            <circle key={p.label} cx={p.x} cy={p.y} r="2.2" fill="rgb(79 70 229)" />
+                          ))}
+                        </svg>
+                      </div>
+                      <div className="flex items-center gap-2 mt-2">
+                        {graphPoints.map((p) => (
+                          <div key={`${p.label}-legend`} className="flex-1 text-center">
+                            <p className="text-[10px] font-black text-slate-500">{p.label}</p>
+                            <p className="text-[9px] font-bold text-slate-400">₹{p.value.toFixed(0)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </section>
           </motion.div>
         )}
       </div>

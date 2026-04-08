@@ -2,8 +2,10 @@ import React from 'react';
 import { Clock, ShieldAlert, LogOut } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
+import { useNavigate } from 'react-router-dom';
 
 export default function PendingApproval() {
+  const navigate = useNavigate();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-3xl p-8 shadow-2xl border border-slate-200 text-center">
@@ -21,6 +23,13 @@ export default function PendingApproval() {
             You will receive full access to the dashboard once your certifications and details are verified.
           </p>
         </div>
+
+        <button 
+          onClick={() => navigate('/worker/verification')}
+          className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 mb-3"
+        >
+          Upload/Update Certificates
+        </button>
 
         <button 
           onClick={() => signOut(auth)}

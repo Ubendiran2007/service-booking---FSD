@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { User, Booking, BookingStatus, BookingUrgency, ServiceLevel } from '../types';
+import { User, Booking, BookingStatus, BookingUrgency, ServiceLevel, BookingLocationSource } from '../types';
 import Layout from '../components/Layout';
 import { 
   Search, 
@@ -62,11 +62,18 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
   const [comment, setComment] = useState('');
   const [problemNotes, setProblemNotes] = useState('');
   const [location, setLocation] = useState<{ lat: number, lng: number } | null>(user.profile.location || null);
+  const [savedHomeLocation, setSavedHomeLocation] = useState<{ lat: number, lng: number } | null>(user.profile.location || null);
+  const [locationSource, setLocationSource] = useState<BookingLocationSource>('home');
   const [manualLat, setManualLat] = useState('');
   const [manualLng, setManualLng] = useState('');
   const [gpsError, setGpsError] = useState('');
   const [toast, setToast] = useState<{ message: string; type: ToastType; visible: boolean }>({ message: '', type: 'info', visible: false });
   const [allBookings, setAllBookings] = useState<Booking[]>([]);
+  const [showAllWorkers, setShowAllWorkers] = useState(false);
+  const [sortMode, setSortMode] = useState<'score' | 'distance'>('score');
+  const [mapRangeKm, setMapRangeKm] = useState<number>(50);
+  // Best available customer coordinates: live GPS first, otherwise saved home.
+  const customerLocation = location ?? savedHomeLocation ?? null;
 
   const parseManualCoords = () => {
     const lat = Number(manualLat);
@@ -76,9 +83,10 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
     return { lat, lng };
   };
 
-  const setBookingCoords = (coords: { lat: number; lng: number }) => {
+  const setBookingCoords = (coords: { lat: number; lng: number }, source: BookingLocationSource) => {
     const normalized = { lat: coords.lat, lng: coords.lng };
     setGpsError('');
+    setLocationSource(source);
     setLocation(normalized);
     setManualLat(String(normalized.lat));
     setManualLng(String(normalized.lng));
@@ -88,7 +96,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
   useEffect(() => {
     if (!bookingModal.open) return;
     setGpsError('');
-    const base = location ?? user.profile.location ?? null;
+    const base = location ?? savedHomeLocation ?? null;
     if (base) {
       setManualLat(String(base.lat));
       setManualLng(String(base.lng));
@@ -103,9 +111,21 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
     }
   }, []);
 
+  // Keep saved home location synced from Firestore profile.
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    const unsubUser = onSnapshot(doc(db, 'users', auth.currentUser.uid), (snap) => {
+      const profileLoc = (snap.data() as User | undefined)?.profile?.location || null;
+      if (profileLoc && typeof profileLoc !== 'string') {
+        setSavedHomeLocation(profileLoc);
+      }
+    });
+    return () => unsubUser();
+  }, []);
+
   // Auto-capture and save GPS on mount to fix legacy accounts without coordinates
   useEffect(() => {
-    if (!user.profile.location && navigator.geolocation && auth.currentUser) {
+    if (!savedHomeLocation && navigator.geolocation && auth.currentUser) {
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
           const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
@@ -114,8 +134,6 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
             await updateDoc(doc(db, 'users', auth.currentUser!.uid), {
               'profile.location': coords
             });
-            // Also update local user object so map works immediately
-            user.profile.location = coords;
           } catch (e) {
             console.error('Failed to save GPS to profile:', e);
           }
@@ -181,8 +199,8 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
       let activeLocation = location;
       
       // If no specific location captured, use profile one
-      if (!activeLocation && user.profile.location) {
-          activeLocation = user.profile.location;
+      if (!activeLocation && savedHomeLocation) {
+          activeLocation = savedHomeLocation;
       }
 
       if (!activeLocation || typeof activeLocation === 'string') {
@@ -231,6 +249,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
         status: 'pending' as BookingStatus,
         notes: problemNotes,
         location: activeLocation,
+        locationSource,
         urgency: bookingUrgency,
         serviceLevel,
         slotDurationMinutes: DEFAULT_SLOT_DURATION_MINUTES,
@@ -276,7 +295,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
   };
 
   const getBookingQuote = () => {
-    const dest = location ?? user.profile.location ?? null;
+    const dest = location ?? savedHomeLocation ?? null;
     if (!bookingModal.worker) {
       return computeServiFlowPrice({
         serviceLevel,
@@ -311,7 +330,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
 
   const workersWithScores = workers.map(w => {
     let distance = 0;
-    const activeCustomerLoc = location || user.profile.location;
+    const activeCustomerLoc = location || savedHomeLocation;
     if (activeCustomerLoc && w.profile.location) {
       distance = haversineDistance(activeCustomerLoc, w.profile.location);
     }
@@ -365,15 +384,35 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
     };
   });
 
-  const filteredWorkers = workersWithScores.filter(w => {
-    const matchesSearch = w.profile.name.toLowerCase().includes(search.toLowerCase()) || 
-                         w.profile.category?.toLowerCase().includes(search.toLowerCase());
+  const filteredWorkersForAutoAssignBase = workersWithScores.filter(w => {
+    const matchesSearch =
+      w.profile.name.toLowerCase().includes(search.toLowerCase()) ||
+      w.profile.category?.toLowerCase().includes(search.toLowerCase());
     const matchesCategory = selectedCategory === 'all' || w.profile.category === selectedCategory;
-    const dest = location || user.profile.location;
+    const dest = location || savedHomeLocation;
     const zoneOk =
-      !dest || !w.profile.location ? true : haversineDistance(w.profile.location, dest) <= (w.profile.serviceRadiusKm ?? 50);
+      !dest || !w.profile.location
+        ? true
+        : haversineDistance(w.profile.location, dest) <= (w.profile.serviceRadiusKm ?? 50);
     return matchesSearch && matchesCategory && zoneOk;
-  }).sort((a, b) => b.score - a.score).slice(0, 6);
+  });
+
+  // Display: show all workers that match search/category, even if outside service zone.
+  // Booking/auto-assign will still use the in-zone list above.
+  const filteredWorkersForDisplayBase = workersWithScores.filter((w) => {
+    const matchesSearch =
+      w.profile.name.toLowerCase().includes(search.toLowerCase()) ||
+      w.profile.category?.toLowerCase().includes(search.toLowerCase());
+    const matchesCategory = selectedCategory === 'all' || w.profile.category === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  const filteredWorkers = [...filteredWorkersForDisplayBase].sort((a: any, b: any) => {
+    if (sortMode === 'distance') return (a.distance ?? 0) - (b.distance ?? 0);
+    return (b.score ?? 0) - (a.score ?? 0);
+  });
+
+  const visibleWorkers = showAllWorkers ? filteredWorkers : filteredWorkers.slice(0, 12);
 
   const handleAutoAssign = () => {
     if (selectedCategory === 'all') {
@@ -381,8 +420,8 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
        return;
     }
 
-    // 1. Take the top result from our pre-scored, pre-sorted filteredWorkers array
-    const bestMatch = filteredWorkers[0];
+    // Auto-assign must still respect service-zone feasibility.
+    const bestMatch = [...filteredWorkersForAutoAssignBase].sort((a, b) => b.score - a.score)[0];
     
     if (bestMatch) {
       if (bestMatch.score > 0.6) { // Minimum threshold for "good match"
@@ -443,24 +482,56 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                   <Navigation className="w-5 h-5 text-indigo-600" />
                   Live Explorer: Workers Near You
                 </h2>
+                <div className="flex items-center gap-3 flex-wrap justify-end">
+                  <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-sm">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Map range</span>
+                    <select
+                      className="text-xs font-black text-slate-700 outline-none bg-transparent"
+                      value={mapRangeKm}
+                      onChange={(e) => setMapRangeKm(parseInt(e.target.value, 10))}
+                    >
+                      <option value={10}>10 km</option>
+                      <option value={25}>25 km</option>
+                      <option value={50}>50 km</option>
+                      <option value={100}>100 km</option>
+                      <option value={99999}>All</option>
+                    </select>
+                  </div>
+                </div>
               </div>
               <div className="h-[350px] bg-white rounded-[32px] border border-slate-200 shadow-xl overflow-hidden relative group">
                 <MapComponent
-                  center={[location?.lat || 20, location?.lng || 78]}
+                  center={[customerLocation?.lat ?? 20, customerLocation?.lng ?? 78]}
                   zoom={12}
                   markers={[
-                    ...(location ? [{ position: [location.lat, location.lng], label: '🏠 You (Current Location)', type: 'customer' as const }] : []),
-                    ...filteredWorkers
-                      .filter(w => w.profile.location && (w.profile.isOnline !== false || bookings.some(b => b.workerId === w.uid && b.status === 'accepted')))
-                      .map(w => ({
+                    ...(customerLocation
+                      ? [
+                          {
+                            position: [customerLocation.lat, customerLocation.lng],
+                            label: '🏠 You (Current Location)',
+                            type: 'customer' as const,
+                          },
+                        ]
+                      : []),
+                    ...workersWithScores
+                      .filter((w: any) => {
+                        if (!w.profile.location) return false;
+                        const visibleOnline = w.profile.isOnline !== false || bookings.some((b) => b.workerId === w.uid && b.status === 'accepted');
+                        if (!visibleOnline) return false;
+                        // If we don't have any customer coords at all, show all worker pins.
+                        if (!customerLocation) return true;
+                        if (mapRangeKm >= 99999) return true;
+                        return (w.distance ?? 0) <= mapRangeKm;
+                      })
+                      .map((w: any) => ({
                         position: [w.profile.location!.lat, w.profile.location!.lng],
-                        label: `Professional: ${w.profile.name} (${w.profile.category})`,
+                        label: `Professional: ${w.profile.name} (${w.profile.category}) • ${w.distance < 0.1 ? 'Nearby' : `${w.distance.toFixed(1)} km`}`,
                         type: 'worker' as const
                       }))
                   ]}
                   showRoute={false}
                 />
-                {!location && (
+                {!customerLocation && (
                    <div className="absolute inset-0 bg-slate-50/50 backdrop-blur-[2px] flex items-center justify-center z-20">
                       <div className="bg-white p-6 rounded-2xl shadow-xl border border-slate-200 text-center max-w-sm">
                          <MapPin className="w-8 h-8 text-indigo-600 mx-auto mb-4 animate-bounce" />
@@ -479,15 +550,38 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                   <Star className="w-5 h-5 text-indigo-600" />
                   Smart Professional Recommendations
                 </h2>
-                <button
-                  onClick={handleAutoAssign}
-                  className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl text-sm font-bold shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
-                >
-                  <Zap className="w-4 h-4" /> Auto Assign Best Match
-                </button>
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-sm">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Sort</span>
+                    <select
+                      className="text-xs font-black text-slate-700 outline-none bg-transparent"
+                      value={sortMode}
+                      onChange={(e) => setSortMode(e.target.value as any)}
+                    >
+                      <option value="score">Best match</option>
+                      <option value="distance">Nearest</option>
+                    </select>
+                  </div>
+                  {filteredWorkers.length > 12 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllWorkers((v) => !v)}
+                      className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-sm font-black shadow-sm hover:shadow-md hover:border-indigo-200 transition-all"
+                    >
+                      {showAllWorkers ? 'Show top 12' : `Show all (${filteredWorkers.length})`}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleAutoAssign}
+                    className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl text-sm font-bold shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+                  >
+                    <Zap className="w-4 h-4" /> Auto Assign Best Match
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredWorkers.map((worker) => (
+                {visibleWorkers.map((worker) => (
                   <motion.div
                     key={worker.uid}
                     layout
@@ -782,11 +876,11 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl"
+              className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl max-h-[70vh] flex flex-col overflow-hidden"
             >
-              <div className="flex justify-between items-start mb-6">
+              <div className="flex justify-between items-start px-5 py-4 border-b border-slate-100 shrink-0">
                 <div>
-                  <h3 className="text-2xl font-bold text-slate-900">Book Service</h3>
+                  <h3 className="text-xl font-bold text-slate-900">Book Service</h3>
                   <div className="flex items-center gap-2 mt-1">
                     <p className="text-slate-500 font-medium">With {bookingModal.worker?.profile.name || 'Professional'}</p>
                     <div className="w-1 h-1 bg-slate-300 rounded-full" />
@@ -807,7 +901,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                 </button>
               </div>
 
-              <div className="space-y-6">
+              <div className="space-y-4 p-5 overflow-y-auto">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">Date</label>
@@ -912,7 +1006,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                         }`}
                       >
                         <span className="block text-xs font-black text-slate-900">{opt.label}</span>
-                        <span className="text-[9px] font-bold text-slate-400">${opt.hint} base</span>
+                        <span className="text-[9px] font-bold text-slate-400">₹{opt.hint} base</span>
                       </button>
                     ))}
                   </div>
@@ -980,7 +1074,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                         navigator.geolocation.getCurrentPosition(
                           (pos) => {
                             const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-                            setBookingCoords(coords);
+                            setBookingCoords(coords, 'live');
                           },
                           () =>
                             setGpsError(
@@ -988,17 +1082,31 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                             )
                         );
                       }}
-                      className={`text-[10px] uppercase tracking-wider font-black px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${location && location.lat !== user.profile.location?.lat ? 'bg-emerald-600 border-emerald-600 text-white shadow-xl shadow-emerald-200 scale-105' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}
+                      className={`text-[10px] uppercase tracking-wider font-black px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
+                        location &&
+                        (!savedHomeLocation ||
+                          location.lat !== savedHomeLocation.lat ||
+                          location.lng !== savedHomeLocation.lng)
+                          ? 'bg-emerald-600 border-emerald-600 text-white shadow-xl shadow-emerald-200 scale-105'
+                          : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                      }`}
                     >
                       <MapPin className="w-3 h-3" /> Use My Exact Live GPS
                     </button>
                     
-                    {user.profile.location && (
+                    {savedHomeLocation && (
                       <button 
                         onClick={() => {
-                          setBookingCoords(user.profile.location!);
+                          setBookingCoords(savedHomeLocation, 'home');
                         }}
-                        className={`text-[10px] uppercase tracking-wider font-black px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${location?.lat === user.profile.location?.lat ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl shadow-indigo-200 scale-105' : 'bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100'}`}
+                        className={`text-[10px] uppercase tracking-wider font-black px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
+                          location &&
+                          savedHomeLocation &&
+                          location.lat === savedHomeLocation.lat &&
+                          location.lng === savedHomeLocation.lng
+                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl shadow-indigo-200 scale-105'
+                            : 'bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100'
+                        }`}
                       >
                         <UserIcon className="w-3 h-3" /> Use My Saved Home Location
                       </button>
@@ -1011,7 +1119,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                           setGpsError('Enter valid coordinates (lat -90..90, lng -180..180).');
                           return;
                         }
-                        setBookingCoords(coords);
+                        setBookingCoords(coords, 'manual');
                       }}
                       className="text-[10px] uppercase tracking-wider font-black px-3 py-1.5 rounded-lg border bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition-all flex items-center gap-1.5"
                     >
@@ -1061,17 +1169,17 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between font-bold text-slate-700">
                       <span>Work cost</span>
-                      <span>${quote.workCost.toFixed(2)}</span>
+                      <span>₹{quote.workCost.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between font-bold text-slate-700">
                       <span>Travel cost</span>
-                      <span>${quote.travelCost.toFixed(2)}</span>
+                      <span>₹{quote.travelCost.toFixed(2)}</span>
                     </div>
                     <div className="pt-2 border-t border-indigo-200/80">
                       <div className="flex justify-between font-black text-slate-900 mb-1">
                         <span>Additional charges</span>
                         <span className={additionalChargesTotal < 0 ? 'text-emerald-600' : 'text-indigo-700'}>
-                          {additionalChargesTotal > 0 ? '+' : additionalChargesTotal < 0 ? '−' : ''}$
+                          {additionalChargesTotal > 0 ? '+' : additionalChargesTotal < 0 ? '−' : ''}₹
                           {Math.abs(additionalChargesTotal).toFixed(2)}
                         </span>
                       </div>
@@ -1079,7 +1187,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                         <li className="flex justify-between">
                           <span>Urgency {bookingUrgency === 'urgent' ? '(35% × work)' : '(off)'}</span>
                           <span>
-                            {quote.urgencyCharge > 0 ? '+' : quote.urgencyCharge < 0 ? '−' : ''}$
+                            {quote.urgencyCharge > 0 ? '+' : quote.urgencyCharge < 0 ? '−' : ''}₹
                             {Math.abs(quote.urgencyCharge).toFixed(2)}
                           </span>
                         </li>
@@ -1088,14 +1196,14 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                             Time {quote.timeBand === 'peak' ? '(peak)' : quote.timeBand === 'low_demand' ? '(low demand)' : '(none)'}
                           </span>
                           <span className={quote.timeCharge < 0 ? 'text-emerald-600' : ''}>
-                            {quote.timeCharge > 0 ? '+' : quote.timeCharge < 0 ? '−' : ''}$
+                            {quote.timeCharge > 0 ? '+' : quote.timeCharge < 0 ? '−' : ''}₹
                             {Math.abs(quote.timeCharge).toFixed(2)}
                           </span>
                         </li>
                         <li className="flex justify-between">
                           <span>Demand (jobs ÷ workers × work cost)</span>
                           <span>
-                            {quote.demandCharge > 0 ? '+' : quote.demandCharge < 0 ? '−' : ''}$
+                            {quote.demandCharge > 0 ? '+' : quote.demandCharge < 0 ? '−' : ''}₹
                             {Math.abs(quote.demandCharge).toFixed(2)}
                           </span>
                         </li>
@@ -1103,7 +1211,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                     </div>
                     <div className="flex justify-between text-base pt-2 border-t border-indigo-200 font-black text-indigo-900">
                       <span>Final total</span>
-                      <span>${quote.finalPrice.toFixed(2)}</span>
+                      <span>₹{quote.finalPrice.toFixed(2)}</span>
                     </div>
                   </div>
                 </div>
@@ -1134,7 +1242,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                 <div>
                   <h3 className="text-2xl font-bold text-slate-900">Payment & Feedback</h3>
                   <p className="text-slate-500">
-                    Pay ${(feedbackModal.booking?.payment?.amount ?? 0).toFixed(2)} and rate the service
+                    Pay ₹{(feedbackModal.booking?.payment?.amount ?? 0).toFixed(2)} and rate the service
                   </p>
                 </div>
                 <button onClick={() => setFeedbackModal({ open: false, booking: null })} className="p-2 hover:bg-slate-100 rounded-full">

@@ -109,7 +109,7 @@ Quotes are computed in **`frontend/src/lib/pricing.ts`** (`computeServiFlowPrice
 
 ## Real-world alignment (industry patterns)
 
-ServiFlow’s **pricing** and **routing** follow design patterns common in **on-demand marketplaces** (e.g. ride-hailing and large home-service platforms). The goal is **familiar economics and UX**, not a claim of parity with any specific commercial product.
+ServiFlow’s **pricing** and **routing** follow design patterns common in **on-demand marketplaces**—the same *ideas* users know from apps like **Uber** (fare structure, surge-style dynamics, live trip context) and **Urban Company** (job-based pricing, professional quality signals). The goal is **familiar economics and UX**, not a claim of parity with any specific commercial product or algorithm.
 
 | Pattern | In ServiFlow |
 |--------|----------------|

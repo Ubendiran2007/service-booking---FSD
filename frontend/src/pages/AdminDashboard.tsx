@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, addDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { User, Booking, BookingStatus } from '../types';
 import Layout from '../components/Layout';
@@ -34,15 +34,26 @@ import { motion, AnimatePresence } from 'motion/react';
 import { format, subDays, isWithinInterval } from 'date-fns';
 import { cn } from '../lib/utils';
 
+function buildEmployeeIdFromProfile(name?: string, phone?: string): string {
+  const namePart = (name || '').replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 5);
+  const phonePart = (phone || '').replace(/\D/g, '').slice(0, 5);
+  return `${namePart}${phonePart}`;
+}
+
 function VerificationCard({
   worker,
   onReview,
+  duplicateEmployeeId,
 }: {
   worker: User;
   onReview: (uid: string, approve: boolean, remarks: string) => Promise<void>;
+  duplicateEmployeeId: boolean;
 }) {
   const [remarks, setRemarks] = useState('');
   const v = worker.profile.verification;
+  const workerEmployeeId = v?.employeeId?.trim().toUpperCase() || '';
+  const expectedEmployeeId = buildEmployeeIdFromProfile(worker.profile.name, worker.profile.phone);
+  const employeeIdValid = !!workerEmployeeId && workerEmployeeId === expectedEmployeeId && !duplicateEmployeeId;
   return (
     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
       <div className="flex items-start justify-between gap-4">
@@ -59,17 +70,16 @@ function VerificationCard({
         <span className="font-bold text-slate-800">Skills:</span> {(v?.skills || []).join(', ') || '—'}
       </p>
       <div className="space-y-2">
-        <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Documents</p>
-        <ul className="space-y-1">
-          {(v?.certificateUrls || []).map((url, i) => (
-            <li key={url}>
-              <a href={url} target="_blank" rel="noreferrer" className="text-indigo-600 text-sm font-bold underline">
-                Open document {i + 1}
-              </a>
-            </li>
-          ))}
-          {(v?.certificateUrls || []).length === 0 && <li className="text-xs text-slate-400">No files uploaded</li>}
-        </ul>
+        <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Employee ID</p>
+        <p className="text-sm font-mono font-bold text-slate-800">{workerEmployeeId || 'Not provided'}</p>
+        <p className="text-xs text-slate-500 font-bold">Expected: {expectedEmployeeId || '—'}</p>
+        {duplicateEmployeeId ? (
+          <p className="text-xs font-bold text-red-500">ID already used by another worker</p>
+        ) : (
+          <p className={`text-xs font-bold ${employeeIdValid ? 'text-emerald-600' : 'text-red-500'}`}>
+            {employeeIdValid ? 'ID format matched' : 'ID does not match name+phone rule'}
+          </p>
+        )}
       </div>
       <textarea
         className="w-full p-3 rounded-xl border border-slate-200 text-sm min-h-[80px]"
@@ -80,8 +90,9 @@ function VerificationCard({
       <div className="grid grid-cols-2 gap-3">
         <button
           type="button"
+          disabled={!employeeIdValid}
           onClick={() => onReview(worker.uid, true, remarks)}
-          className="py-3 bg-emerald-600 text-white rounded-xl font-black text-xs uppercase tracking-widest"
+          className="py-3 bg-emerald-600 text-white rounded-xl font-black text-xs uppercase tracking-widest disabled:opacity-40"
         >
           Approve
         </button>
@@ -178,11 +189,39 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
   };
 
   const handleVerificationReview = async (uid: string, approve: boolean, remarks: string) => {
+    const worker = allWorkers.find((w) => w.uid === uid);
+    const workerEmployeeId = worker?.profile.verification?.employeeId?.trim().toUpperCase() || '';
+    const expected = buildEmployeeIdFromProfile(worker?.profile.name, worker?.profile.phone);
+    const duplicateEmployeeId = allWorkers.some(
+      (w) =>
+        w.uid !== uid &&
+        (w.profile.verification?.employeeId || '').trim().toUpperCase() === workerEmployeeId
+    );
+    if (approve && (!workerEmployeeId || workerEmployeeId !== expected)) {
+      alert('Cannot approve: employee ID does not match first 5 letters of name + first 5 digits of phone.');
+      return;
+    }
+    if (approve && duplicateEmployeeId) {
+      alert('Cannot approve: employee ID already exists for another worker.');
+      return;
+    }
     const userRef = doc(db, 'users', uid);
     await updateDoc(userRef, {
+      status: approve ? 'active' : 'pending',
       'profile.verification.status': approve ? 'verified' : 'rejected',
       'profile.verification.adminRemarks': remarks.trim(),
       'profile.verification.reviewedAt': new Date().toISOString(),
+    });
+
+    await addDoc(collection(db, 'notifications'), {
+      userId: uid,
+      title: approve ? 'Verification Approved' : 'Verification Rejected',
+      message: approve
+        ? `Your worker verification is approved. You now have full dashboard access.${remarks.trim() ? ` Note: ${remarks.trim()}` : ''}`
+        : `Your worker verification is rejected.${remarks.trim() ? ` Reason: ${remarks.trim()}` : ' Please update your details and resubmit.'}`,
+      type: 'system',
+      isRead: false,
+      createdAt: new Date().toISOString(),
     });
   };
 
@@ -199,7 +238,7 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
                 { label: 'Demand Growth', value: `${growthTrend > 0 ? '+' : ''}${growthTrend}%`, icon: TrendingUp, color: 'bg-indigo-600', sub: 'vs last 7 days', trend: growthTrend > 0 ? 'up' : 'down' },
                 { label: 'Worker Utilization', value: `${utilizationRate}%`, icon: Layers, color: 'bg-slate-900', sub: 'Workers on jobs', trend: 'neutral' },
                 { label: 'Cancellation Rate', value: `${cancellationRate}%`, icon: AlertCircle, color: cancelRisk === 'HIGH' ? 'bg-red-500' : 'bg-amber-500', sub: 'System reliability', trend: 'risk' },
-                { label: 'Gross Revenue', value: `$${totalRevenue.toFixed(0)}`, icon: CreditCard, color: 'bg-emerald-600', sub: 'Total completed', trend: 'positive' },
+                { label: 'Gross Revenue', value: `₹${totalRevenue.toFixed(0)}`, icon: CreditCard, color: 'bg-emerald-600', sub: 'Total completed', trend: 'positive' },
               ].map((stat, i) => (
                 <div key={i} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-xl transition-all overflow-hidden relative group">
                   <div className="flex items-center gap-4 relative z-10">
@@ -340,9 +379,11 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
             <div>
               <h2 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-                <Shield className="w-8 h-8 text-indigo-600" /> Certificate & skills verification
+                <Shield className="w-8 h-8 text-indigo-600" /> Employee ID verification
               </h2>
-              <p className="text-slate-500 text-sm mt-1">Review uploads, then approve or reject with remarks.</p>
+              <p className="text-slate-500 text-sm mt-1">
+                Approve only if ID matches: first 5 letters of name (uppercase) + first 5 digits of phone.
+              </p>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {pendingVerification.length === 0 ? (
@@ -351,7 +392,17 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
                 </div>
               ) : (
                 pendingVerification.map((w) => (
-                  <VerificationCard key={w.uid} worker={w} onReview={handleVerificationReview} />
+                  <VerificationCard
+                    key={w.uid}
+                    worker={w}
+                    onReview={handleVerificationReview}
+                    duplicateEmployeeId={allWorkers.some(
+                      (x) =>
+                        x.uid !== w.uid &&
+                        (x.profile.verification?.employeeId || '').trim().toUpperCase() ===
+                          (w.profile.verification?.employeeId || '').trim().toUpperCase()
+                    )}
+                  />
                 ))
               )}
             </div>
@@ -426,7 +477,7 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
                            <p className="text-[11px] font-bold text-slate-400 mt-0.5">{booking.date} • {booking.time}</p>
                         </td>
                         <td className="px-6 py-4 text-right">
-                           <p className="text-sm font-black text-slate-900">${booking.payment.amount}</p>
+                           <p className="text-sm font-black text-slate-900">₹{booking.payment.amount}</p>
                            {booking.payment.amount > 100 && (
                              <span className="text-[9px] font-black text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full mt-1 inline-block">High Value</span>
                            )}
