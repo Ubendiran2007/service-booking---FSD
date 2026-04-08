@@ -6,7 +6,7 @@ dotenv.config();
 /**
  * Note: For production, you should use a service account JSON file.
  * We'll attempt to initialize with credentials from environment variables 
- * or a mock if not available to ensure the backend starts without errors.
+ * or a minimal fallback if not available to ensure the backend starts without errors.
  */
 
 try {

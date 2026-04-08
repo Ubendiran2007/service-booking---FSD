@@ -77,6 +77,11 @@ export default function App() {
               {(user) => <AdminDashboard view="bookings" user={user} />}
             </ProtectedRoute>
           } />
+          <Route path="/admin/verification" element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              {(user) => <AdminDashboard view="verification" user={user} />}
+            </ProtectedRoute>
+          } />
           
           <Route path="/customer" element={
             <ProtectedRoute allowedRoles={['customer']}>
@@ -102,6 +107,11 @@ export default function App() {
           <Route path="/worker/reviews" element={
             <ProtectedRoute allowedRoles={['worker']}>
               {(user) => <WorkerDashboard view="reviews" user={user} />}
+            </ProtectedRoute>
+          } />
+          <Route path="/worker/verification" element={
+            <ProtectedRoute allowedRoles={['worker']}>
+              {(user) => <WorkerDashboard view="verification" user={user} />}
             </ProtectedRoute>
           } />
 

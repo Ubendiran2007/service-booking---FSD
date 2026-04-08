@@ -8,18 +8,28 @@ export class BookingService {
     }
 
     async createBooking(data) {
-        const bookingData = {
-            ...data,
-            location: data.location || "",
-            status: "pending",
-            payment: { amount: data.amount || 50, status: "pending" },
-            createdAt: new Date().toISOString()
-        };
-        const bookingRef = await db.collection('bookings').add(bookingData);
-        
-        await this._notify(data.workerId, "New Booking Request", `You received a ${data.serviceType} request for ${data.date}.`, "booking");
+        try {
+            const bookingData = {
+                ...data,
+                location: data.location || "",
+                status: "pending",
+                payment: { 
+                  amount: data.amount || data.payment?.amount || 50, 
+                  status: "pending" 
+                },
+                createdAt: new Date().toISOString()
+            };
+            
+            console.log('[BOOKING] Creating in Firestore:', bookingData);
+            const bookingRef = await db.collection('bookings').add(bookingData);
+            
+            await this._notify(data.workerId, "New Booking Request", `You received a ${data.serviceType} request for ${data.date}.`, "booking");
 
-        return { id: bookingRef.id, message: "Request sent successfully" };
+            return { id: bookingRef.id, message: "Request sent successfully" };
+        } catch (error) {
+            console.error('[BOOKING_ERROR] Failed to save to Firestore:', error);
+            throw error;
+        }
     }
 
     async getUserBookings(uid) {

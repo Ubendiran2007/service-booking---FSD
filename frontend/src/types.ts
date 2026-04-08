@@ -1,5 +1,23 @@
 export type UserRole = 'admin' | 'customer' | 'worker';
-export type UserStatus = 'pending' | 'approved' | 'active';
+export type UserStatus = 'pending' | 'approved' | 'active' | 'rejected';
+
+export type VerificationStatus = 'none' | 'pending' | 'verified' | 'rejected';
+
+export interface WorkerVerification {
+  status: VerificationStatus;
+  certificateUrls: string[];
+  skills: string[];
+  experienceYears: number;
+  adminRemarks?: string;
+  reviewedAt?: string;
+  submittedAt?: string;
+}
+
+export interface ReliabilityStats {
+  cancellations: number;
+  delays: number;
+  onTimeCompletes: number;
+}
 
 export interface UserProfile {
   name: string;
@@ -12,6 +30,15 @@ export interface UserProfile {
   category?: string;
   rating?: number;
   totalReviews?: number;
+  welcomeShown?: boolean;
+  isOnline?: boolean;
+  /** Admin-verified professional (documents + skills reviewed). */
+  verification?: WorkerVerification;
+  /** km — worker only; jobs outside radius from worker base should be filtered. */
+  serviceRadiusKm?: number;
+  /** 0–100 platform reliability score (cancellations / delays reduce). */
+  reliabilityScore?: number;
+  reliabilityStats?: ReliabilityStats;
 }
 
 export interface User {
@@ -25,6 +52,11 @@ export interface User {
 
 export type BookingStatus = 'pending' | 'accepted' | 'rejected' | 'completed' | 'cancelled';
 
+export type BookingUrgency = 'normal' | 'urgent';
+
+/** Job complexity tier — drives work cost in the pricing engine. */
+export type ServiceLevel = 'small' | 'medium' | 'large';
+
 export interface Booking {
   id: string;
   customerId: string;
@@ -33,6 +65,8 @@ export interface Booking {
   date: string;
   time: string;
   status: BookingStatus;
+  location?: { lat: number; lng: number } | string;
+  notes?: string;
   payment: {
     amount: number;
     status: 'pending' | 'paid';
@@ -43,6 +77,15 @@ export interface Booking {
   };
   rejectionReason?: string;
   createdAt: string;
+  urgency?: BookingUrgency;
+  /** Complexity tier for pricing (work cost). */
+  serviceLevel?: ServiceLevel;
+  /** Default 60 — used for overlap detection across adjacent slots. */
+  slotDurationMinutes?: number;
+  acceptedAt?: string;
+  completedAt?: string;
+  wasDelayed?: boolean;
+  cancelledBy?: 'customer' | 'worker';
 }
 
 export interface Notification {

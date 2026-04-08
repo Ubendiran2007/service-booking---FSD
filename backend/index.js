@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import workerRoutes from './routes/workers.js';
 import bookingRoutes from './routes/bookings.js';
 import adminRoutes from './routes/admin.js';
+import debugRoutes from './routes/debug.js';
 
 dotenv.config();
 
@@ -25,6 +26,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok', service: 'ServiFlow Ba
 app.use('/api/workers', workerRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/debug', debugRoutes);
 
 // Error Handling
 app.use((err, req, res, next) => {

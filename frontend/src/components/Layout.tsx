@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { LogOut, User as UserIcon, Calendar, CheckCircle, Clock, Star, MapPin, Search, Menu, X, Bell } from 'lucide-react';
+import { LogOut, User as UserIcon, Calendar, CheckCircle, Clock, Star, MapPin, Search, Menu, X, Bell, Navigation, CreditCard, ExternalLink, Shield } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
 import { auth, db } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { collection, query, where, orderBy, limit, onSnapshot, doc, updateDoc } from 'firebase/firestore';
@@ -45,6 +46,7 @@ export default function Layout({ children, role, userName }: LayoutProps) {
   const navItems = {
     admin: [
       { label: 'Worker Approvals', path: '/admin', icon: CheckCircle },
+      { label: 'Verification', path: '/admin/verification', icon: Shield },
       { label: 'All Bookings', path: '/admin/bookings', icon: Calendar },
     ],
     customer: [
@@ -54,6 +56,7 @@ export default function Layout({ children, role, userName }: LayoutProps) {
     worker: [
       { label: 'My Schedule', path: '/worker', icon: Calendar },
       { label: 'New Requests', path: '/worker/requests', icon: Clock },
+      { label: 'Verification', path: '/worker/verification', icon: Shield },
       { label: 'My Reviews', path: '/worker/reviews', icon: Star },
     ],
   };
@@ -110,24 +113,59 @@ export default function Layout({ children, role, userName }: LayoutProps) {
                       </div>
                       <div className="max-h-[60vh] overflow-y-auto">
                         {notifications.length === 0 ? (
-                          <div className="p-8 text-center text-slate-400 text-sm">
-                            <Bell className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                            <p>No notifications yet.</p>
+                          <div className="p-12 text-center">
+                            <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-dashed border-slate-100">
+                               <Bell className="w-6 h-6 text-slate-200" />
+                            </div>
+                            <p className="text-sm font-bold text-slate-400">No new activity</p>
                           </div>
                         ) : (
                           notifications.map((notif) => (
                             <div 
                               key={notif.id} 
-                              onClick={() => { if(!notif.isRead) markAsRead(notif.id); setShowNotifications(false); }}
-                              className={`p-4 border-b border-slate-50 hover:bg-slate-50 transition-colors cursor-pointer flex gap-4 ${!notif.isRead ? 'bg-indigo-50/40' : ''}`}
+                              className={`p-5 border-b border-slate-50 transition-all ${!notif.isRead ? 'bg-indigo-50/40 relative' : ''}`}
                             >
-                              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${!notif.isRead ? 'bg-indigo-100 text-indigo-600 shadow-inner' : 'bg-slate-100 text-slate-400'}`}>
-                                <Bell className="w-5 h-5" />
-                              </div>
-                              <div>
-                                <p className={`text-sm ${!notif.isRead ? 'font-black text-slate-900' : 'font-bold text-slate-700'}`}>{notif.title}</p>
-                                <p className="text-[13px] text-slate-500 mt-1 leading-snug">{notif.message}</p>
-                                <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-wider">{new Date(notif.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                              {!notif.isRead && <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-600" />}
+                              <div className="flex gap-4">
+                                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${notif.type === 'booking' ? 'bg-indigo-600 text-white' : 'bg-emerald-500 text-white shadow-lg'}`}>
+                                  {notif.type === 'booking' ? <Calendar className="w-5 h-5" /> : <CreditCard className="w-5 h-5" />}
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <p className="text-xs font-black text-slate-900 tracking-tight uppercase">{notif.title}</p>
+                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">{formatDistanceToNow(new Date(notif.createdAt))} ago</p>
+                                  </div>
+                                  <p className="text-[13px] text-slate-600 leading-snug font-medium">{notif.message}</p>
+                                  
+                                  <div className="flex items-center gap-2 mt-3">
+                                    {(notif.title.includes('Confirmed') || notif.title.includes('Request') || notif.title.includes('Completed')) && (
+                                      <button 
+                                        onClick={() => { 
+                                          markAsRead(notif.id); 
+                                          setShowNotifications(false);
+                                          if (role === 'customer') navigate('/customer/bookings');
+                                          else if (role === 'worker') {
+                                            if (notif.title.includes('Request')) navigate('/worker/requests');
+                                            else navigate('/worker');
+                                          }
+                                        }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-indigo-700 transition-colors"
+                                      >
+                                        <Navigation className="w-3 h-3" /> {notif.title.includes('Request') ? 'View' : 'Track'}
+                                      </button>
+                                    )}
+                                    {notif.isRead ? (
+                                      <span className="text-[9px] font-black text-slate-300 uppercase">Read</span>
+                                    ) : (
+                                      <button 
+                                        onClick={() => markAsRead(notif.id)}
+                                        className="text-[9px] font-black text-indigo-600 uppercase tracking-widest hover:underline"
+                                      >
+                                        Dismiss
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           ))

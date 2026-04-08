@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { Calendar, Mail, Lock, AlertCircle, ArrowRight } from 'lucide-react';
@@ -13,6 +13,21 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  const formatAuthError = (err: any) => {
+    const code = err?.code as string | undefined;
+    if (!code) return err?.message || 'Failed to login';
+    switch (code) {
+      case 'auth/invalid-credential':
+      case 'auth/wrong-password':
+      case 'auth/user-not-found':
+        return 'Invalid email or password. Make sure this user exists in Firebase Authentication (not only Firestore).';
+      case 'auth/too-many-requests':
+        return 'Too many attempts. Please wait a moment and try again.';
+      default:
+        return `Firebase: ${code}`;
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -22,47 +37,11 @@ export default function Login() {
       try {
         userCredential = await signInWithEmailAndPassword(auth, email, password);
       } catch (signInErr: any) {
-        // Dev Fallback: Auto-register if it's a seeded account we're testing
-        if (signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') {
-          const devEmails = [
-            'admin@serviflow.com', 
-            'john.plumber@example.com', 
-            'sarah.spark@example.com', 
-            'mike.mechanic@example.com', 
-            'anna.tidy@example.com',
-            'customer.jane@example.com'
-          ];
-          if (devEmails.includes(email)) {
-            userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          } else {
-            throw signInErr;
-          }
-        } else {
-          throw signInErr;
-        }
+        throw signInErr;
       }
 
       const userRef = doc(db, 'users', userCredential.user.uid);
-      let userDoc = await getDoc(userRef);
-      
-      // Sync Logic: If UID lookup fails, check if an account with this email exists (e.g. from seed)
-      if (!userDoc.exists()) {
-        const { collection, getDocs, setDoc, deleteDoc, query, where } = await import('firebase/firestore');
-        const q = query(collection(db, 'users'), where('email', '==', email));
-        const querySnapshot = await getDocs(q);
-        
-        if (!querySnapshot.empty) {
-          const oldDoc = querySnapshot.docs[0];
-          const userData = oldDoc.data();
-          // Move data to new UID and update UID field
-          await setDoc(userRef, { ...userData, uid: userCredential.user.uid });
-          // If the old one was a different ID, delete it
-          if (oldDoc.id !== userCredential.user.uid) {
-             await deleteDoc(oldDoc.ref);
-          }
-          userDoc = await getDoc(userRef);
-        }
-      }
+      const userDoc = await getDoc(userRef);
 
       if (userDoc.exists()) {
         const userData = userDoc.data();
@@ -73,7 +52,7 @@ export default function Login() {
         setError('User record not found in database.');
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to login');
+      setError(formatAuthError(err));
     } finally {
       setLoading(false);
     }
