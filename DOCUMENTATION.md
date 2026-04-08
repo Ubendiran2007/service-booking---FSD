@@ -1,6 +1,6 @@
 # 🛠 ServiFlow: Engineering-Driven Service Booking & Scheduling System
 
-ServiFlow is an optimized full-stack service platform designed for high-transparency coordination between professional service workers and customers. The system architecture prioritizes mathematical precision in routing, scheduling, and resource allocation.
+ServiFlow is an optimized full-stack service platform designed for high-transparency coordination between professional service workers and customers. The system architecture prioritizes mathematical precision in **routing**, **scheduling**, **resource allocation**, and an **auditable pricing engine** (work cost, travel slabs, urgency, peak/low-demand time, and slot demand).
 
 ---
 
@@ -59,18 +59,66 @@ When a customer views **live tracking** (`frontend/src/components/TrackingMap.ts
 
 For **worker search**, **zone checks**, **scoring**, and **grid labels**, the app uses **Haversine** distance from the worker’s **base** (`profile.location`) to the **customer destination**, and a **30 km/h** heuristic ETA for quick display (`frontend/src/pages/CustomerDashboard.tsx`). That layer is intentionally lightweight so sorting and filtering stay snappy; it is **not** a substitute for the road-based route shown during live tracking.
 
-### 4. Demand-Responsive Pricing (DRP)
-Instead of a single fixed rate, quote price scales with **demand**, **lead time**, optional **explicit urgent** flag, and **worker rating**.
+### 4. Pricing engine (work + travel + surcharges)
 
-**Formula (as implemented in customer booking modal):**
+Quotes are computed in **`frontend/src/lib/pricing.ts`** (`computeServiFlowPrice`) and mirrored in the **booking modal** (`CustomerDashboard.tsx`). The model is **additive and auditable**: work cost is the primary anchor; distance affects **travel only**; urgency, time band, and slot demand add line items derived from **Base Price = Work Cost**.
 
-`Price = Base_Price × Demand_Multiplier × Lead_Time_Multiplier × Urgent_Multiplier × Rating_Multiplier`
+**Final price**
 
-*   **Base_Price**: 50 (currency units as shown in UI).
-*   **Demand_Multiplier**: `1 + (jobs_in_slot_for_category / max(1, workers_in_category)) × 1.5` (non-rejected, non-cancelled jobs in that slot).
-*   **Lead_Time_Multiplier**: Same-day **1.3×**, next-day **1.1×**, otherwise **1.0×**.
-*   **Urgent_Multiplier**: **1.35×** when the customer selects **Urgent service** (`booking.urgency === 'urgent'`).
-*   **Rating_Multiplier**: `1 + Rating/10`.
+`FinalPrice = max(0, round(Work_Cost + Travel_Cost + Urgency_Charge + Time_Charge + Demand_Charge, 2))`
+
+**Work cost (service complexity)** — stored on the booking as `bookings/{id}.serviceLevel`:
+
+| `serviceLevel` | Work cost (currency units, UI) |
+|----------------|--------------------------------|
+| `small`        | 300                            |
+| `medium`       | 700                            |
+| `large`        | 2000                           |
+
+**Travel cost (distance slabs)** — Haversine distance **worker base** (`profile.location`) → **customer destination** (`bookings.location`), **not** folded into work cost:
+
+| Distance (km) | Travel cost |
+|-----------------|------------|
+| &lt; 2          | 30         |
+| 2–5 (≥2, &lt;5) | 80         |
+| 5–10            | 150        |
+| &gt; 10         | 250        |
+
+**Urgency charge** — `booking.urgency === 'urgent'` → **`+0.35 × Base Price`**; normal → **0**.
+
+**Time charge (peak vs low demand)** — uses **slot start time** (`booking.time`). **Peak** windows: **09:00–12:00** and **18:00–21:00** (evening applies when those slots exist). Counts as peak: **`+0.2 × Base Price`**. If **not** peak and **slot demand ratio** `jobs_in_slot_for_category / max(workers_in_category, 1) < 0.5`, **low-demand** discount: **`-0.1 × Base Price`**. Otherwise time charge **0**. Peak takes precedence over the low-demand branch.
+
+- **Jobs in slot**: same definition as **`slotDemandForCategory`** in `scheduling.ts` (non-rejected, non-cancelled, same category/date/time).
+- **Workers in category**: count of active workers with that **`profile.category`** (minimum divisor **1**).
+
+**Demand charge** — **`Base Price × (jobs_in_slot_for_category / max(workers_in_category, 1))`**.
+
+**API output** (for UI and persistence): `workCost`, `travelCost`, `urgencyCharge`, `timeCharge`, `demandCharge`, `finalPrice`; implementation also returns `distanceKm` and `timeBand` (`peak` | `normal` | `low_demand`). The customer sees a **line-item breakdown**; **`payment.amount`** on the booking is set to **`finalPrice`**.
+
+**Fairness intent**: large jobs dominate the total via work cost; long jobs still add a **capped travel slab** so “small job, long drive” does not explode relative to “large job, short drive” in the same way a multiplicative-only model would.
+
+**Pricing justification** (why each component exists):
+
+- **Work cost dominates** the quote so the total primarily reflects **effort and complexity** of the job, not incidental factors.
+- **Travel cost is slab-based** so distance contributes in **bounded steps**, avoiding runaway per-km charges while still compensating for reach.
+- **Urgency** adds a surcharge so customers who need **priority in scheduling** pay for displacing or accelerating work in the queue.
+- **Time charge** (peak vs low demand) reflects **pressure on popular windows**: peak hours add a premium; quieter slots can earn a modest discount when demand is light.
+- **Demand charge** ties the workload in a slot to **supply** (workers in category), helping **balance** platform load so busy slots price closer to scarcity without abandoning the work-cost anchor.
+
+---
+
+## Real-world alignment (industry patterns)
+
+ServiFlow’s **pricing** and **routing** follow design patterns common in **on-demand marketplaces** (e.g. ride-hailing and large home-service platforms). The goal is **familiar economics and UX**, not a claim of parity with any specific commercial product.
+
+| Pattern | In ServiFlow |
+|--------|----------------|
+| **Base service cost vs. travel** | **Work cost** (complexity) is separate from **travel slabs** (distance)—see §4. |
+| **Dynamic pricing (demand & urgency)** | **Urgency** surcharge, **peak / low-demand** time band, and **demand** charge vs. supply in the slot—see §4. |
+| **Live routing + resilience** | **OSRM + Leaflet Routing Machine** for road-based distance/ETA during tracking; **Haversine + heuristic ETA** if routing fails—see §3 and Location model. |
+| **Quality / trust signals** | **Worker reliability** and **verification** feed **recommendation scoring** and platform **`reliabilityScore`**—see §1 and worker operations. |
+
+Together, these choices keep the system **aligned with common industry practice** while leaving exact formulas and thresholds under your control in code (`pricing.ts`, `scheduling.ts`, dashboards).
 
 ---
 
@@ -196,12 +244,12 @@ flowchart LR
 
 1. **Customer → Search**: The customer picks category, destination (GPS / saved home / manual), and time context. Workers are filtered by **service zone** and scored.
 2. **Worker recommendation**: Weighted scoring ranks professionals; **auto-assign** selects the top match instantly.
-3. **Booking creation**: A booking document is written with slot, location, urgency, and status **pending**; **overlap** checks reduce double-booking.
+3. **Booking creation**: A booking document is written with slot, location, **`serviceLevel`**, **urgency**, computed `payment.amount` (**pricing engine**), and status **pending**; **overlap** checks reduce double-booking.
 4. **Worker notification**: Workers see the request (urgent jobs surfaced first); the pipeline waits on a decision.
 5. **Accept / reject**: On **accept**, status moves to **accepted** and tracking becomes meaningful. On **reject**, the product path is **re-run the recommendation funnel** (next-best worker or different slot)—see **Failure handling**.
 6. **Live GPS tracking**: Worker location updates feed the map; **OSRM + Leaflet Routing Machine** produce distance and ETA to the job site, with **Haversine fallback** if routing fails.
 7. **Job execution → completion**: Status transitions reflect on-site work finishing; timestamps drive reliability rules.
-8. **Payment processing**: Document how your deployment handles settlement (integrated gateway vs. manual); the app’s **DRP** logic sets displayed quotes—wire this to your processor of record in production.
+8. **Payment processing**: Document how your deployment handles settlement (integrated gateway vs. manual); the **pricing engine** sets **`payment.amount`** on the booking and in the feedback flow—wire this to your processor of record in production.
 9. **Feedback submission**: Reviews reinforce trust signals used in scoring.
 10. **Reliability score update**: Completes, lateness, and rejections adjust **`profile.reliabilityScore`** / stats.
 11. **Admin analytics**: Utilization, demand, cancellation/rejection visibility, and verification queues inform operations.
@@ -270,9 +318,10 @@ service firebase.storage {
 ### **Key modules**
 
 - `frontend/src/lib/scheduling.ts` — slot constants, overlap, demand, suggestions.
+- `frontend/src/lib/pricing.ts` — `computeServiFlowPrice`, work/travel slabs, urgency, peak/low-demand time, demand charge.
 - `frontend/src/lib/reliability.ts` — `reliabilityScore` / stats updates.
 - `frontend/src/services/bookingService.ts` — create booking, status changes, cancel, notifications hooks.
-- `frontend/src/types.ts` — `Booking`, `UserProfile`, verification and reliability fields.
+- `frontend/src/types.ts` — `Booking` (incl. `serviceLevel`, `urgency`), `UserProfile`, verification and reliability fields.
 
 ### **Time-slot scheduling (60-minute blocks)**
 
@@ -287,7 +336,11 @@ service firebase.storage {
 
 ### **Urgency**
 
-- Customers can mark **Urgent service** in the booking modal → `bookings/{id}.urgency = 'urgent'`, **higher dynamic price** (urgent multiplier), worker notifications say urgent; **New Requests** highlights urgent jobs first.
+- Customers can mark **Urgent service** in the booking modal → `bookings/{id}.urgency = 'urgent'`, adding **`+35%` of work cost** to the quote (`urgencyCharge` in `pricing.ts`); worker notifications say urgent; **New Requests** highlights urgent jobs first.
+
+### **Service complexity (`serviceLevel`)**
+
+- Customers choose **Small / Medium / Large** in the booking modal → `bookings/{id}.serviceLevel`; this selects **work cost** (300 / 700 / 2000) used as **Base Price** for urgency, time, and demand line items.
 
 ### **Service zone**
 
@@ -328,7 +381,8 @@ Beyond algorithms, ServiFlow is shaped for **low friction** and **trust**:
 - **Smart slot suggestions** reduce decision effort by surfacing **low-demand, available** windows first.
 - **Auto-assign** applies the same scoring engine as search to pick the **best match** in one action.
 - **Verified badge** (admin-approved verification) increases **selection confidence** and feeds the recommendation score.
-- **Urgency** (`urgent` bookings) increases **priority** in worker queues and **price** via DRP—clear tradeoff for faster attention.
+- **Urgency** (`urgent` bookings) increases **priority** in worker queues and adds a **transparent urgency line item** (35% of work cost) on the quote.
+- **Service complexity** (small/medium/large) keeps **large jobs** appropriately expensive while **travel** stays a separate, slabbed fee.
 - **Real-time tracking** with **road routes** (when OSRM is healthy) improves **transparency**; fallback keeps the experience **continuous** if routing fails.
 
 ---

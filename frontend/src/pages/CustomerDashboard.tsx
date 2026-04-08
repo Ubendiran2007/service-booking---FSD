@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { User, Booking, BookingStatus, BookingUrgency } from '../types';
+import { User, Booking, BookingStatus, BookingUrgency, ServiceLevel } from '../types';
 import Layout from '../components/Layout';
 import { 
   Search, 
@@ -41,7 +41,9 @@ import {
   isWorkerSlotBlocked,
   suggestSlotsForWorker,
   DEFAULT_SLOT_DURATION_MINUTES,
+  slotDemandForCategory,
 } from '../lib/scheduling';
+import { computeServiFlowPrice } from '../lib/pricing';
 
 export default function CustomerDashboard({ view = 'search', user }: { view?: 'search' | 'bookings', user: User }) {
   const [workers, setWorkers] = useState<User[]>([]);
@@ -55,6 +57,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
   const [bookingDate, setBookingDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [bookingTime, setBookingTime] = useState('10:00');
   const [bookingUrgency, setBookingUrgency] = useState<BookingUrgency>('normal');
+  const [serviceLevel, setServiceLevel] = useState<ServiceLevel>('medium');
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [problemNotes, setProblemNotes] = useState('');
@@ -201,6 +204,24 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
         }
       }
 
+      const quote = computeServiFlowPrice({
+        serviceLevel,
+        urgency: bookingUrgency,
+        bookingTime,
+        jobsInSlotForCategory: slotDemandForCategory(
+          bookingModal.worker.profile.category,
+          bookingDate,
+          bookingTime,
+          allBookings
+        ),
+        workersInCategory: Math.max(
+          1,
+          workers.filter((w) => w.profile.category === bookingModal.worker!.profile.category).length
+        ),
+        workerBase: bookingModal.worker.profile.location,
+        customerDestination: activeLocation,
+      });
+
       const newBooking = {
         customerId: auth.currentUser.uid,
         workerId: bookingModal.worker.uid,
@@ -211,10 +232,10 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
         notes: problemNotes,
         location: activeLocation,
         urgency: bookingUrgency,
+        serviceLevel,
         slotDurationMinutes: DEFAULT_SLOT_DURATION_MINUTES,
-        amount: getDynamicPrice(),
         payment: {
-          amount: getDynamicPrice(),
+          amount: quote.finalPrice,
           status: 'pending'
         },
         createdAt: new Date().toISOString()
@@ -254,38 +275,39 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
   };
 
-  const getDynamicPrice = () => {
-    const base_price = 50;
-    if (!bookingModal.worker) return base_price;
-    
-    // 1. Demand Multiplier: (Bookings in slot / Total workers in category)
-    const categoryWorkers = workers.filter(w => w.profile.category === bookingModal.worker?.profile.category).length;
-    const slotBookings = allBookings.filter(b => 
-      b.serviceType === bookingModal.worker?.profile.category && 
-      b.date === bookingDate && 
-      b.time === bookingTime &&
-      b.status !== 'rejected' &&
-      b.status !== 'cancelled'
-    ).length;
-    
-    const demandRatio = categoryWorkers > 0 ? slotBookings / categoryWorkers : 0;
-    const demand_multiplier = 1 + (demandRatio * 1.5); // Scalable demand impact
-
-    // 2. Lead-time multiplier: Same-day = 1.3x, Next-day = 1.1x, others = 1.0x
-    const today = format(new Date(), 'yyyy-MM-dd');
-    const tomorrow = format(new Date(Date.now() + 86400000), 'yyyy-MM-dd');
-    const lead_multiplier = bookingDate === today ? 1.3 : bookingDate === tomorrow ? 1.1 : 1.0;
-
-    // 3. Explicit urgent flag (customer-selected) — premium
-    const urgent_multiplier = bookingUrgency === 'urgent' ? 1.35 : 1.0;
-
-    // 4. Rating Multiplier: (Rating / 5) normalized
-    const rating = bookingModal.worker.profile.rating || 0;
-    const rating_multiplier = 1 + (rating / 10); // Elite pros get up to 1.5x
-
-    const price = base_price * demand_multiplier * lead_multiplier * urgent_multiplier * rating_multiplier;
-    return price;
+  const getBookingQuote = () => {
+    const dest = location ?? user.profile.location ?? null;
+    if (!bookingModal.worker) {
+      return computeServiFlowPrice({
+        serviceLevel,
+        urgency: bookingUrgency,
+        bookingTime,
+        jobsInSlotForCategory: 0,
+        workersInCategory: 1,
+        workerBase: null,
+        customerDestination: dest,
+      });
+    }
+    const category = bookingModal.worker.profile.category;
+    const jobsInSlot = slotDemandForCategory(category, bookingDate, bookingTime, allBookings);
+    const workersInCategory = Math.max(
+      1,
+      workers.filter((w) => w.profile.category === category).length
+    );
+    return computeServiFlowPrice({
+      serviceLevel,
+      urgency: bookingUrgency,
+      bookingTime,
+      jobsInSlotForCategory: jobsInSlot,
+      workersInCategory,
+      workerBase: bookingModal.worker.profile.location,
+      customerDestination: dest,
+    });
   };
+
+  const quote = getBookingQuote();
+  const additionalChargesTotal =
+    quote.urgencyCharge + quote.timeCharge + quote.demandCharge;
 
   const workersWithScores = workers.map(w => {
     let distance = 0;
@@ -773,7 +795,14 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                     </span>
                   </div>
                 </div>
-                <button onClick={() => { setBookingUrgency('normal'); setBookingModal({ open: false, worker: null }); }} className="p-2 hover:bg-slate-100 rounded-full">
+                <button
+                  onClick={() => {
+                    setBookingUrgency('normal');
+                    setServiceLevel('medium');
+                    setBookingModal({ open: false, worker: null });
+                  }}
+                  className="p-2 hover:bg-slate-100 rounded-full"
+                >
                   <X className="w-6 h-6 text-slate-400" />
                 </button>
               </div>
@@ -859,6 +888,36 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                   </div>
                 </div>
 
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">Service complexity</label>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">
+                    Work cost is the primary factor; travel adds a distance slab only.
+                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        { id: 'small' as const, label: 'Small', hint: '300' },
+                        { id: 'medium' as const, label: 'Medium', hint: '700' },
+                        { id: 'large' as const, label: 'Large', hint: '2000' },
+                      ]
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setServiceLevel(opt.id)}
+                        className={`rounded-xl border px-2 py-3 text-center transition-all ${
+                          serviceLevel === opt.id
+                            ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-200'
+                            : 'border-slate-200 bg-white hover:border-indigo-200'
+                        }`}
+                      >
+                        <span className="block text-xs font-black text-slate-900">{opt.label}</span>
+                        <span className="text-[9px] font-bold text-slate-400">${opt.hint} base</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <label className="flex items-center gap-3 cursor-pointer p-4 bg-amber-50/80 border border-amber-100 rounded-2xl">
                   <input
                     type="checkbox"
@@ -868,7 +927,7 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                   />
                   <div>
                     <p className="text-sm font-black text-amber-900">Urgent service</p>
-                    <p className="text-[11px] text-amber-800/80">Priority routing & higher pricing for same-day professionals.</p>
+                    <p className="text-[11px] text-amber-800/80">Adds 35% of work cost to the quote (priority queue).</p>
                   </div>
                 </label>
 
@@ -983,12 +1042,70 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
                   />
                 </div>
 
-                <div className="p-4 bg-indigo-50 rounded-2xl flex items-center justify-between">
+                <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-3">
                   <div className="flex items-center gap-3">
-                    <CreditCard className="w-5 h-5 text-indigo-600" />
-                    <span className="text-sm font-bold text-indigo-900">Dynamic Pricing</span>
+                    <CreditCard className="w-5 h-5 text-indigo-600 shrink-0" />
+                    <div>
+                      <span className="text-sm font-black text-indigo-900">Price breakdown</span>
+                      <p className="text-[10px] font-bold text-indigo-600/80 uppercase tracking-tight">
+                        {quote.timeBand === 'peak'
+                          ? 'Peak hours (+20% of work cost)'
+                          : quote.timeBand === 'low_demand'
+                            ? 'Low demand (−10% of work cost)'
+                            : 'Standard time band'}
+                        {' · '}
+                        {quote.distanceKm.toFixed(1)} km to job site
+                      </p>
+                    </div>
                   </div>
-                  <span className="text-xl font-black text-indigo-600">${getDynamicPrice().toFixed(2)}</span>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between font-bold text-slate-700">
+                      <span>Work cost</span>
+                      <span>${quote.workCost.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-slate-700">
+                      <span>Travel cost</span>
+                      <span>${quote.travelCost.toFixed(2)}</span>
+                    </div>
+                    <div className="pt-2 border-t border-indigo-200/80">
+                      <div className="flex justify-between font-black text-slate-900 mb-1">
+                        <span>Additional charges</span>
+                        <span className={additionalChargesTotal < 0 ? 'text-emerald-600' : 'text-indigo-700'}>
+                          {additionalChargesTotal > 0 ? '+' : additionalChargesTotal < 0 ? '−' : ''}$
+                          {Math.abs(additionalChargesTotal).toFixed(2)}
+                        </span>
+                      </div>
+                      <ul className="text-[11px] font-bold text-slate-500 space-y-1 pl-0 list-none">
+                        <li className="flex justify-between">
+                          <span>Urgency {bookingUrgency === 'urgent' ? '(35% × work)' : '(off)'}</span>
+                          <span>
+                            {quote.urgencyCharge > 0 ? '+' : quote.urgencyCharge < 0 ? '−' : ''}$
+                            {Math.abs(quote.urgencyCharge).toFixed(2)}
+                          </span>
+                        </li>
+                        <li className="flex justify-between">
+                          <span>
+                            Time {quote.timeBand === 'peak' ? '(peak)' : quote.timeBand === 'low_demand' ? '(low demand)' : '(none)'}
+                          </span>
+                          <span className={quote.timeCharge < 0 ? 'text-emerald-600' : ''}>
+                            {quote.timeCharge > 0 ? '+' : quote.timeCharge < 0 ? '−' : ''}$
+                            {Math.abs(quote.timeCharge).toFixed(2)}
+                          </span>
+                        </li>
+                        <li className="flex justify-between">
+                          <span>Demand (jobs ÷ workers × work cost)</span>
+                          <span>
+                            {quote.demandCharge > 0 ? '+' : quote.demandCharge < 0 ? '−' : ''}$
+                            {Math.abs(quote.demandCharge).toFixed(2)}
+                          </span>
+                        </li>
+                      </ul>
+                    </div>
+                    <div className="flex justify-between text-base pt-2 border-t border-indigo-200 font-black text-indigo-900">
+                      <span>Final total</span>
+                      <span>${quote.finalPrice.toFixed(2)}</span>
+                    </div>
+                  </div>
                 </div>
 
                 <button
@@ -1016,7 +1133,9 @@ export default function CustomerDashboard({ view = 'search', user }: { view?: 's
               <div className="flex justify-between items-start mb-6">
                 <div>
                   <h3 className="text-2xl font-bold text-slate-900">Payment & Feedback</h3>
-                  <p className="text-slate-500">Pay $50.00 and rate the service</p>
+                  <p className="text-slate-500">
+                    Pay ${(feedbackModal.booking?.payment?.amount ?? 0).toFixed(2)} and rate the service
+                  </p>
                 </div>
                 <button onClick={() => setFeedbackModal({ open: false, booking: null })} className="p-2 hover:bg-slate-100 rounded-full">
                   <X className="w-6 h-6 text-slate-400" />
