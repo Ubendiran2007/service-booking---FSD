@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { LogOut, User as UserIcon, Calendar, CheckCircle, Clock, Star, MapPin, Search, Menu, X, Bell, Navigation, CreditCard, ExternalLink, Shield, BarChart3 } from 'lucide-react';
+import { LogOut, User as UserIcon, Calendar, CheckCircle, Clock, Star, MapPin, Search, Menu, X, Bell, Navigation, CreditCard, ExternalLink, Shield, BarChart3, Sun, Moon } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { auth, db } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
@@ -20,6 +20,29 @@ export default function Layout({ children, role, userName }: LayoutProps) {
   const [notifications, setNotifications] = React.useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = React.useState(false);
   const notificationPanelRef = React.useRef<HTMLDivElement>(null);
+  const [theme, setTheme] = React.useState<'light' | 'dark'>('light');
+
+  React.useEffect(() => {
+    const stored = localStorage.getItem('sf-theme');
+    if (stored === 'light' || stored === 'dark') {
+      setTheme(stored);
+      document.documentElement.classList.toggle('dark', stored === 'dark');
+      return;
+    }
+    const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)')?.matches;
+    const initial: 'light' | 'dark' = prefersDark ? 'dark' : 'light';
+    setTheme(initial);
+    document.documentElement.classList.toggle('dark', initial === 'dark');
+  }, []);
+
+  const toggleTheme = () => {
+    setTheme((cur) => {
+      const next = cur === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('sf-theme', next);
+      document.documentElement.classList.toggle('dark', next === 'dark');
+      return next;
+    });
+  };
 
   React.useEffect(() => {
     if (!showNotifications) return;
@@ -58,7 +81,8 @@ export default function Layout({ children, role, userName }: LayoutProps) {
 
   const navItems = {
     admin: [
-      { label: 'Worker Approvals', path: '/admin', icon: CheckCircle },
+      { label: 'Dashboard', path: '/admin/dashboard', icon: BarChart3 },
+      { label: 'Professional Approvals', path: '/admin/approvals', icon: CheckCircle },
       { label: 'Verification', path: '/admin/verification', icon: Shield },
       { label: 'All Bookings', path: '/admin/bookings', icon: Calendar },
     ],
@@ -74,40 +98,54 @@ export default function Layout({ children, role, userName }: LayoutProps) {
       { label: 'My Reviews', path: '/worker/reviews', icon: Star },
     ],
   };
+  const dedupedNavItems = navItems[role].filter(
+    (item, idx, arr) => arr.findIndex((x) => x.label === item.label && x.path === item.path) === idx
+  );
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
+      <header className="bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center gap-2">
+          <div className="flex h-16 items-center gap-6">
+            <div className="flex items-center gap-2 shrink-0">
               <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200">
                 <Calendar className="text-white w-6 h-6" />
               </div>
-              <span className="text-xl font-bold text-slate-900 tracking-tight">ServiFlow</span>
+              <span className="text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">ServiFlow</span>
             </div>
 
             {/* Desktop Nav */}
-            <nav className="hidden md:flex items-center gap-8">
-              {navItems[role].map((item) => (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors flex items-center gap-2"
+            <nav className="hidden md:flex items-center gap-4 flex-1 min-w-0">
+              <div className="grid grid-flow-col auto-cols-fr items-center gap-2 flex-1 min-w-0">
+                {dedupedNavItems.map((item) => (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className="h-10 px-3 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-50 dark:hover:bg-slate-900/50 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+                  >
+                    <item.icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </Link>
+                ))}
+              </div>
+              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1 shrink-0" />
+              <div className="flex items-center gap-4 shrink-0">
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  className="p-2 rounded-xl text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors"
+                  title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                  aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
                 >
-                  <item.icon className="w-4 h-4" />
-                  {item.label}
-                </Link>
-              ))}
-              <div className="h-6 w-px bg-slate-200 mx-2" />
-              <div className="flex items-center gap-4">
+                  {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                </button>
                 {/* Notifications — ref used for click-outside to close */}
                 <div className="relative" ref={notificationPanelRef}>
                   <button 
                     type="button"
                     onClick={() => setShowNotifications(!showNotifications)}
-                    className="p-2 text-slate-400 hover:text-indigo-600 transition-colors relative"
+                    className="p-2 text-slate-400 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors relative"
                   >
                     <Bell className="w-5 h-5" />
                     {notifications.filter(n => !n.isRead).length > 0 && (
@@ -117,9 +155,9 @@ export default function Layout({ children, role, userName }: LayoutProps) {
 
                   {/* Notification Dropdown */}
                   {showNotifications && (
-                    <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden z-50">
-                      <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-                        <h4 className="font-bold text-slate-900">Notifications</h4>
+                    <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-slate-950 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden z-50">
+                      <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 flex justify-between items-center">
+                        <h4 className="font-bold text-slate-900 dark:text-slate-100">Notifications</h4>
                         {notifications.filter(n => !n.isRead).length > 0 && (
                           <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg uppercase tracking-widest">
                             {notifications.filter(n => !n.isRead).length} New
@@ -129,7 +167,7 @@ export default function Layout({ children, role, userName }: LayoutProps) {
                       <div className="max-h-[60vh] overflow-y-auto">
                         {notifications.length === 0 ? (
                           <div className="p-12 text-center">
-                            <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-dashed border-slate-100">
+                            <div className="w-16 h-16 bg-slate-50 dark:bg-slate-900/40 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-dashed border-slate-100 dark:border-slate-800">
                                <Bell className="w-6 h-6 text-slate-200" />
                             </div>
                             <p className="text-sm font-bold text-slate-400">No new activity</p>
@@ -147,10 +185,10 @@ export default function Layout({ children, role, userName }: LayoutProps) {
                                 </div>
                                 <div className="flex-1">
                                   <div className="flex items-center justify-between mb-1">
-                                    <p className="text-xs font-black text-slate-900 tracking-tight uppercase">{notif.title}</p>
+                                    <p className="text-xs font-black text-slate-900 dark:text-slate-100 tracking-tight uppercase">{notif.title}</p>
                                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">{formatDistanceToNow(new Date(notif.createdAt))} ago</p>
                                   </div>
-                                  <p className="text-[13px] text-slate-600 leading-snug font-medium">{notif.message}</p>
+                                  <p className="text-[13px] text-slate-600 dark:text-slate-300 leading-snug font-medium">{notif.message}</p>
                                   
                                   <div className="flex items-center gap-2 mt-3">
                                     {(notif.title.includes('Confirmed') || notif.title.includes('Request') || notif.title.includes('Completed')) && (
@@ -190,12 +228,12 @@ export default function Layout({ children, role, userName }: LayoutProps) {
                   )}
                 </div>
 
-                <div className="w-px h-6 bg-slate-200" />
+                <div className="w-px h-6 bg-slate-200 dark:bg-slate-800" />
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200">
-                    <UserIcon className="w-4 h-4 text-slate-600" />
+                  <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-800">
+                    <UserIcon className="w-4 h-4 text-slate-600 dark:text-slate-300" />
                   </div>
-                  <span className="text-sm font-semibold text-slate-700">{userName || 'User'}</span>
+                  <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{userName || 'User'}</span>
                 </div>
                 <button
                   onClick={handleLogout}
@@ -209,7 +247,7 @@ export default function Layout({ children, role, userName }: LayoutProps) {
 
             {/* Mobile Menu Button */}
             <button
-              className="md:hidden p-2 text-slate-600"
+              className="md:hidden p-2 text-slate-600 dark:text-slate-200"
               onClick={() => setIsMenuOpen(!isMenuOpen)}
             >
               {isMenuOpen ? <X /> : <Menu />}
@@ -219,18 +257,26 @@ export default function Layout({ children, role, userName }: LayoutProps) {
 
         {/* Mobile Nav */}
         {isMenuOpen && (
-          <div className="md:hidden bg-white border-t border-slate-100 p-4 space-y-4">
-            {navItems[role].map((item) => (
+          <div className="md:hidden bg-white dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800 p-4 space-y-4">
+            {dedupedNavItems.map((item) => (
               <Link
                 key={item.path}
                 to={item.path}
-                className="flex items-center gap-3 p-3 rounded-lg text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 font-medium"
+                className="flex items-center gap-3 p-3 rounded-lg text-slate-600 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-slate-900 hover:text-indigo-600 dark:hover:text-indigo-400 font-medium"
                 onClick={() => setIsMenuOpen(false)}
               >
                 <item.icon className="w-5 h-5" />
                 {item.label}
               </Link>
             ))}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="flex items-center gap-3 p-3 rounded-lg text-slate-600 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-900 font-medium w-full text-left"
+            >
+              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
             <button
               onClick={handleLogout}
               className="flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50 font-medium w-full text-left"

@@ -5,7 +5,7 @@ import { Booking, BookingStatus, User } from '../types';
 import Layout from '../components/Layout';
 import { Check, X, Clock, Calendar, MapPin, Phone, User as UserIcon, DollarSign, Navigation, Star, TrendingUp, AlertCircle, Info, Zap, Award, Bell, LogOut, ChevronRight, CheckCircle, Shield, Activity, Flame, BarChart3, LineChart } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { addDays, format, formatDistanceToNow, isToday, isYesterday, subDays } from 'date-fns';
+import { addDays, endOfWeek, format, formatDistanceToNow, isToday, isYesterday, startOfWeek, subDays, subWeeks } from 'date-fns';
 import TrackingMap from '../components/TrackingMap';
 import { bookingService } from '../services/bookingService';
 import Toast, { ToastType } from '../components/Toast';
@@ -213,6 +213,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
     const h = parseInt(b.time.split(':')[0], 10);
     earningsByHour[h] = (earningsByHour[h] || 0) + (b.payment?.amount || 0);
   });
+  const todayKey = format(new Date(), 'yyyy-MM-dd');
   const chartHours = [9, 10, 11, 12, 13, 14, 15, 16, 17];
   const maxHourEarning = Math.max(...chartHours.map((h) => earningsByHour[h] || 0), 1);
 
@@ -248,18 +249,19 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
     }
 
     if (reportPeriod === 'weekly') {
+      // Last 8 calendar weeks (Mon-Sun) including current week.
       return Array.from({ length: 8 }, (_, idx) => {
-        const rangeEnd = new Date(today);
-        rangeEnd.setDate(today.getDate() - (7 * (7 - idx)));
-        const rangeStart = new Date(rangeEnd);
-        rangeStart.setDate(rangeEnd.getDate() - 6);
+        const weeksAgo = 7 - idx;
+        const anchor = subWeeks(today, weeksAgo);
+        const rangeStart = startOfWeek(anchor, { weekStartsOn: 1 });
+        const rangeEnd = endOfWeek(anchor, { weekStartsOn: 1 });
         const inWeek = completedJobs.filter((b) => {
           const d = new Date(`${b.date}T00:00:00`);
           return d >= rangeStart && d <= rangeEnd;
         });
         return {
           key: format(rangeStart, 'yyyy-MM-dd'),
-          label: `W${idx + 1}`,
+          label: format(rangeStart, 'dd MMM'),
           subLabel: `${format(rangeStart, 'dd MMM')} - ${format(rangeEnd, 'dd MMM')}`,
           jobs: inWeek.length,
           earnings: inWeek.reduce((sum, b) => sum + (b.payment?.amount || 0), 0),
@@ -541,14 +543,29 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                       type="date"
                       className="h-10 pl-10 pr-3 border border-slate-200 rounded-xl text-sm font-bold"
                       value={earningsViewDate}
-                      onChange={(e) => setEarningsViewDate(e.target.value)}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setEarningsViewDate(next > todayKey ? todayKey : next);
+                      }}
+                      max={todayKey}
                       aria-label="Select earnings day"
                     />
                   </div>
                   <button
                     type="button"
-                    onClick={() => setEarningsViewDate((d) => format(addDays(new Date(`${d}T00:00:00`), 1), 'yyyy-MM-dd'))}
-                    className="h-10 w-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center justify-center"
+                    onClick={() =>
+                      setEarningsViewDate((d) => {
+                        const next = format(addDays(new Date(`${d}T00:00:00`), 1), 'yyyy-MM-dd');
+                        return next > todayKey ? todayKey : next;
+                      })
+                    }
+                    disabled={earningsViewDate >= todayKey}
+                    className={cn(
+                      'h-10 w-10 rounded-xl border flex items-center justify-center',
+                      earningsViewDate >= todayKey
+                        ? 'border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed'
+                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                    )}
                     title="Next day"
                     aria-label="Next day"
                   >
@@ -849,7 +866,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                 ))}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total jobs</p>
                   <p className="text-2xl font-black text-slate-900 mt-1">{reportTotals.jobs}</p>
@@ -857,6 +874,12 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total earnings</p>
                   <p className="text-2xl font-black text-slate-900 mt-1">₹{reportTotals.earnings.toFixed(0)}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Average / job</p>
+                  <p className="text-2xl font-black text-slate-900 mt-1">
+                    ₹{(reportTotals.jobs > 0 ? reportTotals.earnings / reportTotals.jobs : 0).toFixed(0)}
+                  </p>
                 </div>
               </div>
 
@@ -880,22 +903,39 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                       No report data available for selected period.
                     </div>
                   ) : (
-                    <div className="flex items-end gap-2 h-44">
-                      {reportData.map((d) => {
-                        const pct = reportMax > 0 ? Math.round((d.earnings / reportMax) * 100) : 0;
-                        return (
-                          <div key={d.key} className="flex-1 flex flex-col items-center gap-2">
-                            <span className="text-[9px] font-bold text-slate-400">₹{d.earnings.toFixed(0)}</span>
-                            <motion.div
-                              initial={{ height: 0 }}
-                              animate={{ height: `${Math.max(pct, d.earnings > 0 ? 10 : 4)}%` }}
-                              className={cn('w-full rounded-t-xl min-h-[4px]', d.earnings > 0 ? 'bg-indigo-600' : 'bg-slate-100')}
-                              title={`${d.subLabel}: ₹${d.earnings.toFixed(0)} • ${d.jobs} jobs`}
-                            />
-                            <span className="text-[10px] font-black text-slate-500">{d.label}</span>
-                          </div>
-                        );
-                      })}
+                    <div className="relative">
+                      <div className="absolute inset-0 flex flex-col justify-between pointer-events-none">
+                        {[0, 1, 2, 3].map((i) => (
+                          <div key={`grid-${i}`} className="border-t border-dashed border-slate-100" />
+                        ))}
+                      </div>
+                      <div className="flex items-end gap-2 h-44 relative">
+                        {reportData.map((d) => {
+                          const pct = reportMax > 0 ? Math.round((d.earnings / reportMax) * 100) : 0;
+                          const maxPx = 160;
+                          const minPx = d.earnings > 0 ? 14 : 6;
+                          const targetPx = Math.max(minPx, Math.round((pct / 100) * maxPx));
+                          return (
+                            <div key={d.key} className="flex-1 flex flex-col items-center gap-2">
+                              <span className="text-[9px] font-bold text-slate-400 tabular-nums">₹{d.earnings.toFixed(0)}</span>
+                              <div className="w-full h-40 flex items-end">
+                                <motion.div
+                                  initial={{ height: 0 }}
+                                  animate={{ height: targetPx }}
+                                  className={cn(
+                                    'w-full rounded-t-xl transition-colors',
+                                    d.earnings > 0 ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-100'
+                                  )}
+                                  title={`${d.subLabel}: ₹${d.earnings.toFixed(0)} • ${d.jobs} jobs`}
+                                />
+                              </div>
+                              <span className="text-[10px] font-black text-slate-500 text-center leading-tight">
+                                {d.label}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -911,6 +951,11 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                     <>
                       <div className="h-40">
                         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
+                          <g stroke="rgb(241 245 249)" strokeWidth="1">
+                            <line x1="0" y1="25" x2="100" y2="25" />
+                            <line x1="0" y1="50" x2="100" y2="50" />
+                            <line x1="0" y1="75" x2="100" y2="75" />
+                          </g>
                           <polyline
                             fill="none"
                             stroke="rgb(79 70 229)"
@@ -918,7 +963,9 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
                             points={graphPoints.map((p) => `${p.x},${p.y}`).join(' ')}
                           />
                           {graphPoints.map((p) => (
-                            <circle key={p.label} cx={p.x} cy={p.y} r="2.2" fill="rgb(79 70 229)" />
+                            <circle key={p.label} cx={p.x} cy={p.y} r="2.4" fill="rgb(79 70 229)">
+                              <title>{`${p.label}: ₹${p.value.toFixed(0)}`}</title>
+                            </circle>
                           ))}
                         </svg>
                       </div>

@@ -109,7 +109,7 @@ function VerificationCard({
   );
 }
 
-export default function AdminDashboard({ view = 'approvals', user }: { view?: 'approvals' | 'bookings' | 'verification', user: User }) {
+export default function AdminDashboard({ view = 'dashboard', user }: { view?: 'dashboard' | 'approvals' | 'bookings' | 'verification', user: User }) {
   const [pendingWorkers, setPendingWorkers] = useState<User[]>([]);
   const [allWorkers, setAllWorkers] = useState<User[]>([]);
   const [allBookings, setAllBookings] = useState<Booking[]>([]);
@@ -230,7 +230,7 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
   return (
     <Layout role="admin" userName={user.profile.name}>
       <div className="space-y-10">
-        {view === 'approvals' && (
+        {view === 'dashboard' && (
           <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="space-y-10">
             {/* KPI Diagnostics */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -257,21 +257,6 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
               ))}
             </div>
 
-            {/* Strategy Center */}
-            {strategyInsights.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {strategyInsights.map((ins, i) => (
-                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} key={i} className={cn("p-5 rounded-2xl border flex items-start gap-3", ins.bg)}>
-                    <ins.icon className={cn("w-5 h-5 shrink-0 mt-0.5", ins.color)} />
-                    <div>
-                      <p className={cn("text-[9px] font-black uppercase tracking-widest leading-none mb-1", ins.color)}>{ins.title}</p>
-                      <p className="text-xs font-bold text-slate-700 leading-snug">{ins.text}</p>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            )}
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               {/* Demand Heatmap */}
               <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
@@ -285,13 +270,9 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
                       <React.Fragment key={day}>
                         <div className="text-[10px] font-black text-slate-400 flex items-center justify-end pr-2 uppercase">{day}</div>
                         {heatmapTimes.map((time) => {
-                           // 🔮 Real Density Alignment: Calculate actual slot load
                            const slotCount = allBookings.filter(b => b.time === time && format(new Date(b.date), 'EEE') === day).length;
-                           
-                           // Calculate relative heat (Total Slot Bookings vs Platform Peak)
                            const peakCount = Object.values(timeCounts).length > 0 ? Math.max(...(Object.values(timeCounts) as number[])) : 1;
                            const heatLevel = slotCount > 0 ? Math.round((slotCount / peakCount) * 100) : 0;
-                           
                            return (
                              <div 
                                 key={`${day}-${time}`} 
@@ -334,8 +315,11 @@ export default function AdminDashboard({ view = 'approvals', user }: { view?: 'a
                  </div>
               </div>
             </div>
+          </motion.div>
+        )}
 
-            {/* Approvals Grid */}
+        {view === 'approvals' && (
+          <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="space-y-10">
             <section>
               <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
                 <Shield className="w-8 h-8 text-indigo-600" /> Professional Approvals

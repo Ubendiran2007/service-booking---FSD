@@ -75,6 +75,16 @@ export default function App() {
           
           <Route path="/admin" element={
             <ProtectedRoute allowedRoles={['admin']}>
+              {(user) => <Navigate to="/admin/dashboard" replace />}
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/dashboard" element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              {(user) => <AdminDashboard view="dashboard" user={user} />}
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/approvals" element={
+            <ProtectedRoute allowedRoles={['admin']}>
               {(user) => <AdminDashboard view="approvals" user={user} />}
             </ProtectedRoute>
           } />

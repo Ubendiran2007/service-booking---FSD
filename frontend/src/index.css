@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
+/* Enable `dark:` utilities via `.dark` class (Tailwind v4). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-indigo-50: #f5f7ff;
   --color-indigo-100: #ebf0ff;
