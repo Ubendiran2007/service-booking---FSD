@@ -5,7 +5,7 @@ import { Booking, BookingStatus, User } from '../types';
 import Layout from '../components/Layout';
 import { Check, X, Clock, Calendar, MapPin, Phone, User as UserIcon, DollarSign, Navigation, Star, TrendingUp, AlertCircle, Info, Zap, Award, Bell, LogOut, ChevronRight, CheckCircle, Shield, Activity, Flame, BarChart3, LineChart } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
+import { addDays, format, formatDistanceToNow, isToday, isYesterday, subDays } from 'date-fns';
 import TrackingMap from '../components/TrackingMap';
 import { bookingService } from '../services/bookingService';
 import Toast, { ToastType } from '../components/Toast';
@@ -44,6 +44,7 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
   const watchIdRef = useRef<number | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{lat: number, lng: number} | null>(user.profile.location || null);
   const [scheduleViewDate, setScheduleViewDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [earningsViewDate, setEarningsViewDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [skillInput, setSkillInput] = useState((user.profile.verification?.skills || []).join(', '));
   const [expYears, setExpYears] = useState(String(user.profile.verification?.experienceYears ?? 0));
   const [serviceRadius, setServiceRadius] = useState(String(user.profile.serviceRadiusKm ?? 15));
@@ -206,8 +207,9 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
   const peakHour = Object.entries(hourCounts).sort((a,b) => b[1] - a[1])[0]?.[0] || '10';
   const peakDisplay = `${peakHour}:00 - ${parseInt(peakHour)+2}:00`;
 
+  const completedJobsOnEarningsDay = completedJobs.filter((b) => b.date === earningsViewDate);
   const earningsByHour: Record<number, number> = {};
-  completedJobs.forEach((b) => {
+  completedJobsOnEarningsDay.forEach((b) => {
     const h = parseInt(b.time.split(':')[0], 10);
     earningsByHour[h] = (earningsByHour[h] || 0) + (b.payment?.amount || 0);
   });
@@ -519,11 +521,43 @@ export default function WorkerDashboard({ view = 'schedule', user }: { view?: 's
             </div>
 
             <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-              <h3 className="text-lg font-black text-slate-900 mb-2 flex items-center gap-2">
-                <DollarSign className="w-5 h-5 text-emerald-500" /> Earnings by time of day
-              </h3>
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-2">
+                <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-emerald-500" /> Earnings by time of day
+                </h3>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEarningsViewDate((d) => format(subDays(new Date(`${d}T00:00:00`), 1), 'yyyy-MM-dd'))}
+                    className="h-10 w-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center justify-center"
+                    title="Previous day"
+                    aria-label="Previous day"
+                  >
+                    ‹
+                  </button>
+                  <div className="relative">
+                    <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="date"
+                      className="h-10 pl-10 pr-3 border border-slate-200 rounded-xl text-sm font-bold"
+                      value={earningsViewDate}
+                      onChange={(e) => setEarningsViewDate(e.target.value)}
+                      aria-label="Select earnings day"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEarningsViewDate((d) => format(addDays(new Date(`${d}T00:00:00`), 1), 'yyyy-MM-dd'))}
+                    className="h-10 w-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center justify-center"
+                    title="Next day"
+                    aria-label="Next day"
+                  >
+                    ›
+                  </button>
+                </div>
+              </div>
               <p className="text-slate-500 text-sm mb-6">
-                Completed job revenue by start hour. Peak hour:{' '}
+                Completed job revenue by start hour ({earningsViewDate}). Peak hour:{' '}
                 <span className="font-black text-slate-800">
                   {Object.entries(earningsByHour).sort((a, b) => b[1] - a[1])[0]?.[0] || '—'}
                   :00
